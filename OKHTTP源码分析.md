@@ -16,7 +16,7 @@ Response response = call.execute();
 
 请求过程中内部调用逻辑如下：
 
-![image-20200615104833772](F:\提升\总结\图床\image-20200615104833772.png)
+![image-20200615104833772](pics/image-20200615104833772.png)
 
 
 
@@ -224,7 +224,7 @@ void executeOn(ExecutorService executorService) {
 
 ## 1、执行顺序
 
-![image-20200612171047967](F:\提升\总结\图床\image-20200612171047967.png)
+![image-20200612171047967](pics/image-20200612171047967.png)
 
 
 
@@ -239,7 +239,7 @@ RetryAndFollowUpInterceptor开启了一个while(true)的循环，并在循环内
 1. 当请求内部抛出异常时，判定是否需要重试
 2. 当响应结果是3xx重定向时，构建新的请求并发送请求
 
-![image-20200605154411274](F:\提升\总结\图床\image-20200605154411274.png)
+![image-20200605154411274](pics\image-20200605154411274.png)
 
 异常时重试的逻辑相对复杂，有如下的判定逻辑：
 
@@ -272,7 +272,7 @@ private boolean recover(IOException e, Transmitter transmitter,
 
 请求时为Requsest拼接必要的HEADER属性；服务器响应返回后，对响应进行gzip解压。
 
-![image-20200605170334063](F:\提升\总结\图床\image-20200605170334063.png)
+![image-20200605170334063](pics/image-20200605170334063.png)
 
 主要流程：
 
@@ -280,7 +280,7 @@ private boolean recover(IOException e, Transmitter transmitter,
 2. 添加和保存cookie
 3. 若请求时设置了gzip压缩，则在接收内容后进行解压。
 
-![image-20200605165022500](F:\提升\总结\图床\image-20200605165022500.png)
+![image-20200605165022500](pics/image-20200605165022500.png)
 
 
 
@@ -290,7 +290,7 @@ private boolean recover(IOException e, Transmitter transmitter,
 
 #### 3.1 处理流程
 
-![image-20200606180031670](F:\提升\总结\图床\image-20200606180031670.png)
+![image-20200606180031670](pics\image-20200606180031670.png)
 
 
 
@@ -468,7 +468,7 @@ Exchange exchange = transmitter.newExchange(chain, doExtensiveHealthChecks);
 
 负责整个网络连接建立的过程，包括dns以及socket连接过程。
 
-![image-20200701115151248](F:\提升\总结\图床\image-20200701115151248.png)
+![image-20200701115151248](pics/image-20200701115151248.png)
 
 用的时序图，梳理出关键步骤：
 
@@ -480,7 +480,7 @@ Exchange exchange = transmitter.newExchange(chain, doExtensiveHealthChecks);
 
 通过以上5步，最终获取到一个ExChange对象。
 
-![image-20200701115550146](F:\提升\总结\图床\image-20200701115550146.png)
+![image-20200701115550146](pics/image-20200701115550146-1593606532491.png)
 
 ExChange这个对象中最重要的2个属性为RealConnection和ExchangeCodec。RealConnection是一个Socket连接的包装类，ExchangeCode是对Request和Response的封装，它有两个实现，一个是Http1ExchangeCodec，一个是Http2Exchangecodec，分别对应的是Http1协议和Http2协议。
 
