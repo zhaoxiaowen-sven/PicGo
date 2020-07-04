@@ -294,57 +294,108 @@ private boolean recover(IOException e, Transmitter transmitter,
 
 
 
+
+
+
+
 #### 3.2 Http缓存
 
-再介绍Okttp的缓存读取逻辑前，需要先补充一些Http头字段中和缓存相关的知识，在阅读源码时能够更好的理解缓存的一些策略。
+再介绍Okttp的缓存读取逻辑前，需要先补充一些Http头字段中和缓存相关的知识。
 
-**Cache-Control**
+[OKHTTP之缓存配置详解]: https://blog.csdn.net/briblue/article/details/52920531
 
-Cache-control是由服务器返回的Response中添加的头信息，它的目的是告诉客户端是要从本地读取缓存还是直接从服务器摘取消息。它有不同的值，每一个值有不同的作用。
+#### 3.3 缓存读取
 
-OkHttp中可以使用CacheControl属性针对不同的Request设置相应的缓存策略。
+缓存读取逻辑比较复杂，核心的逻辑其实就是3.2中Http缓存的规则。
 
-- **max-age：**这个参数告诉浏览器将页面缓存多长时间，超过这个时间后才再次向服务器发起请求检查页面是否有更新。对于静态的页面，比如图片、CSS、Javascript，一般都不大变更，因此通常我们将存储这些内容的时间设置为较长的时间，这样浏览器会不会向浏览器反复发起请求，也不会去检查是否更新了。
-- **max-stale**：指示客户机可以接收超出超时期间的响应消息。如果指定max-stale消息的值，那么客户机可以接收超出超时期指定值之内的响应消息。
-- **no-cache**：不做缓存。
-- **no-store**：数据不在硬盘中临时保存，这对需要保密的内容比较重要。
-- s-maxage：这个参数告诉缓存服务器(proxy，如Squid)的缓存页面的时间。如果不单独指定，缓存服务器将使用max-age。对于动态内容(比如文档的查看页面)，我们可告诉浏览器很快就过时了(max-age=0)，并告诉缓存服务器(Squid)保留内容一段时间(比如，s-maxage=7200)。一旦我们更新文档，我们将告诉Squid清除老的缓存版本。
-- must-revalidate：这告诉浏览器，一旦缓存的内容过期，一定要向服务器询问是否有新版本。
-- proxy-revalidate：proxy上的缓存一旦过期，一定要向服务器询问是否有新版本。
-- public：告诉缓存服务器, 即便是对于不该缓存的内容也缓存起来，比如当用户已经认证的时候。所有的静态内容(图片、Javascript、CSS等)应该是public的。
-- private：告诉proxy不要缓存，但是浏览器可使用private cache进行缓存。一般登录后的个性化页面是private的。
-- no-transform： 告诉proxy不进行转换，比如告诉手机浏览器不要下载某些图片。
+```
+/** Returns a strategy to use assuming the request can use the network. */
+private CacheStrategy getCandidate() {
+  // No cached response.
+  if (cacheResponse == null) {
+    return new CacheStrategy(request, null);
+  }
 
-**expires**
-expires的效果等同于Cache-Control，不过它是Http 1.0的内容，它的作用是告诉浏览器缓存的过期时间，在此时间内浏览器不需要直接访问服务器地址直接用缓存内容就好了。
-expires最大的问题在于如果服务器时间和本地浏览器相差过大的问题。那样误差就很大。所以基本上用Cache-Control:max-age=多少秒的形式代替。
+  // Drop the cached response if it's missing a required handshake.
+  if (request.isHttps() && cacheResponse.handshake() == null) {
+    return new CacheStrategy(request, null);
+  }
 
-**Last-Modified/If-Modified-Since**
+  // If this response shouldn't have been stored, it should never be used
+  // as a response source. This check should be redundant as long as the
+  // persistence store is well-behaved and the rules are constant.
+  if (!isCacheable(cacheResponse, request)) {
+    return new CacheStrategy(request, null);
+  }
 
-这个需要配合Cache-Control使用，
+  CacheControl requestCaching = request.cacheControl();
+  if (requestCaching.noCache() || hasConditions(request)) {
+    return new CacheStrategy(request, null);
+  }
 
-- Last-Modified：标示这个响应资源的最后修改时间。web服务器在响应请求时，告诉浏览器资源的最后修改时间。
+  CacheControl responseCaching = cacheResponse.cacheControl();
 
-- If-Modified-Since：当资源过期时（使用Cache-Control标识的max-age），发现资源具有Last-Modified声明，则再次向web服务器请求时带上头 If-Modified-Since，表示请求时间。web服务器收到请求后发现有头If-Modified-Since 则与被请求资源的最后修改时间进行比对。若最后修改时间较新，说明资源又被改动过，则响应整片资源内容（写在响应消息包体内），HTTP 200；若最后修改时间较旧，说明资源无新修改，则响应HTTP 304 (无需包体，节省浏览)，告知浏览器继续使用所保存的cache。
+  long ageMillis = cacheResponseAge();
+  long freshMillis = computeFreshnessLifetime();
 
-**Etag/If-None-Match**
-这个也需要配合Cache-Control使用
+  if (requestCaching.maxAgeSeconds() != -1) {
+    freshMillis = Math.min(freshMillis, SECONDS.toMillis(requestCaching.maxAgeSeconds()));
+  }
 
-- Etag对应请求的资源在服务器中的唯一标识（具体规则由服务器决定），比如一张图片，它在服务器中的标识为ETag: W/”ACXbWXd1n0CGMtAd65PcoA==”。
-- If-None-Match 如果浏览器在Cache-Control:max-age=60设置的时间超时后，发现消息头中还设置了Etag值。然后，浏览器会再次向服务器请求数据并添加In-None-Match消息头，它的值就是之前Etag值。服务器通过Etag来定位资源文件，根据它是否更新的情况给浏览器返回200或者是304。
+  long minFreshMillis = 0;
+  if (requestCaching.minFreshSeconds() != -1) {
+    minFreshMillis = SECONDS.toMillis(requestCaching.minFreshSeconds());
+  }
 
-**Etag机制比Last-Modified精确度更高，如果两者同时设置的话，Etag优先级更高。**
+  long maxStaleMillis = 0;
+  if (!responseCaching.mustRevalidate() && requestCaching.maxStaleSeconds() != -1) {
+    maxStaleMillis = SECONDS.toMillis(requestCaching.maxStaleSeconds());
+  }
 
-**Pragma**
-Pragma头域用来包含实现特定的指令，最常用的是Pragma:no-cache。
+  if (!responseCaching.noCache() && ageMillis + minFreshMillis < freshMillis + maxStaleMillis) {
+    Response.Builder builder = cacheResponse.newBuilder();
+    if (ageMillis + minFreshMillis >= freshMillis) {
+      builder.addHeader("Warning", "110 HttpURLConnection \"Response is stale\"");
+    }
+    long oneDayMillis = 24 * 60 * 60 * 1000L;
+    if (ageMillis > oneDayMillis && isFreshnessLifetimeHeuristic()) {
+      builder.addHeader("Warning", "113 HttpURLConnection \"Heuristic expiration\"");
+    }
+    return new CacheStrategy(null, builder.build());
+  }
 
-在HTTP/1.1协议中，它的含义和Cache- Control:no-cache相同。
+  // Find a condition to add to the request. If the condition is satisfied, the response body
+  // will not be transmitted.
+  String conditionName;
+  String conditionValue;
+  if (etag != null) {
+    conditionName = "If-None-Match";
+    conditionValue = etag;
+  } else if (lastModified != null) {
+    conditionName = "If-Modified-Since";
+    conditionValue = lastModifiedString;
+  } else if (servedDate != null) {
+    conditionName = "If-Modified-Since";
+    conditionValue = servedDateString;
+  } else {
+    return new CacheStrategy(request, null); // No condition! Make a regular request.
+  }
 
-#### 3.3 缓存读取的流程
+  Headers.Builder conditionalRequestHeaders = request.headers().newBuilder();
+  Internal.instance.addLenient(conditionalRequestHeaders, conditionName, conditionValue);
 
-OkHttp缓存保存到本地时使用的是DiskLrucache，仅限于GET请求才能使用。若要对POST请求进行缓存，需要通过自定义拦截器的方式实现。下面先介绍下OkHttp推荐的缓存拦截器配置和使用方式。
+  Request conditionalRequest = request.newBuilder()
+      .headers(conditionalRequestHeaders.build())
+      .build();
+  return new CacheStrategy(conditionalRequest, cacheResponse);
+}
+```
 
-##### 1.CacheControl
+#### 3.4 App实践
+
+OkHttp缓存保存到本地时使用的是DiskLrucache，仅限于**GET请求**才能使用。若要对POST请求进行缓存，需要通过自定义拦截器的方式实现。下面先介绍下OkHttp推荐的缓存拦截器配置和使用方式。
+
+##### 1.CacheControl 配置缓存
 
 可以针对每个请求设置不同的缓存策略：
 
@@ -454,11 +505,19 @@ private void testCacheInterceptor(){
 }
 ```
 
+#### 3. 缓存保存
+
+缓存保存采用的是DiskLruCache，key是请求的url，一个请求缓存到本地的文件有2个，分别是响应头以及响应内容。
+
+![image-20200720174053093](pics/image-20200720174053093.png)
+
+
+
 ### 4.ConnectInterceptor
 
 负责了Dns解析和Socket连接（包括tls连接）。
 
-#### 1.连接过程
+#### 1.整体流程
 
 ConnectInterceptor 的核心方法是：
 
@@ -486,30 +545,349 @@ ExChange这个对象中最重要的2个属性为RealConnection和ExchangeCodec�
 
 获取socket和dns过程都是在findConnection()方法中，详细的过程在后面再进行分析，这里ConnectionInterceptor的任务已经完成了。
 
-另外还需要注意的一点是，在执行完ConnectInterceptor之后，其实添加了自定义的网络拦截器networkInterceptors，按照顺序执行的规定，所有的networkInterceptor执行时，socket连接其实已经建立了，可以通过realChain拿到socket做一些事情了，这也就是为什么称之为network Interceptor的原因。
+#### 2.Connection获取
 
-#### 2.socket连接
+Connection中封装了Socket，先看下Connection创建的过程。
 
-通过前面的分析知道，Socket连接和Dns过程都是在ConnecInterceptor中通过Transmitter和ExchangeFinder来完成的，而在前面的时序图中可以看到，最终建立Socket连接的方法是通过ExchangeFinder的findConnection来完成的。
+##### 1.findConnection
 
+findConnection方法过长，总结了一个流程图
 
+![image-20200702120005621](pics/image-20200702120005621.png)
+
+findConnection这个方法做了以下几件事：
+
+1. 检查当前exchangeFinder所保存的Connection是否满足此次请求
+2. 检查当前连接池ConnectionPool中是否满足此次请求的Connection
+3. 检查当前RouteSelector列表中，是否还有可用Route(Route是proxy,IP地址的包装类)，如果没有就发起DNS请求
+4. 通过DNS获取到新的Route之后，第二次从ConnectionPool查找有无可复用的Connection，否则就创建新的RealConnection
+5. 用RealConnection进行TCP和TLS连接，连接成功后保存到ConnectionPool
+
+##### 2.连接池复用
+
+OkHttp的连接复用其实是通过ConnectionPool来实现的，内部有一个connections的ArrayDeque对象就是用来保存缓存的连接池。findConnection中做了两次复用检查，对应调用的方法是transmitterAcquirePooledConnection。
+
+```java
+boolean transmitterAcquirePooledConnection(Address address, Transmitter transmitter,
+    @Nullable List<Route> routes, boolean requireMultiplexed) {
+  assert (Thread.holdsLock(this));
+  for (RealConnection connection : connections) {
+    if (requireMultiplexed && !connection.isMultiplexed()) continue;
+    if (!connection.isEligible(address, routes)) continue;
+    transmitter.acquireConnectionNoEvents(connection);
+    return true;
+  }
+  return false;
+}
+```
+
+ConnectionPool中通过一个cleanup任务维护缓存大小，在每次新增缓存时触发。
+
+```java
+long cleanup(long now) {
+    int inUseConnectionCount = 0;
+    int idleConnectionCount = 0;
+    RealConnection longestIdleConnection = null;
+    long longestIdleDurationNs = Long.MIN_VALUE;
+
+    // Find either a connection to evict, or the time that the next eviction is due.
+    synchronized (this) {
+      for (Iterator<RealConnection> i = connections.iterator(); i.hasNext(); ) {
+        RealConnection connection = i.next();
+
+        // If the connection is in use, keep searching.
+        if (pruneAndGetAllocationCount(connection, now) > 0) {
+          inUseConnectionCount++;
+          continue;
+        }
+
+        idleConnectionCount++;
+
+        // If the connection is ready to be evicted, we're done.
+        long idleDurationNs = now - connection.idleAtNanos;
+        if (idleDurationNs > longestIdleDurationNs) {
+          longestIdleDurationNs = idleDurationNs;
+          longestIdleConnection = connection;
+        }
+      }
+
+      if (longestIdleDurationNs >= this.keepAliveDurationNs
+          || idleConnectionCount > this.maxIdleConnections) {
+        // We've found a connection to evict. Remove it from the list, then close it below (outside
+        // of the synchronized block).
+        connections.remove(longestIdleConnection);
+      } else if (idleConnectionCount > 0) {
+        // A connection will be ready to evict soon.
+        return keepAliveDurationNs - longestIdleDurationNs;
+      } else if (inUseConnectionCount > 0) {
+        // All connections are in use. It'll be at least the keep alive duration 'til we run again.
+        return keepAliveDurationNs;
+      } else {
+        // No connections, idle or in use.
+        cleanupRunning = false;
+        return -1;
+      }
+    }
+
+    closeQuietly(longestIdleConnection.socket());
+
+    // Cleanup again immediately.
+    return 0;
+  }
+```
+
+总结下流程：
+
+1. 遍历所有连接，查询每个连接的引用数量，如果大于 0，表示连接正在使用，无需清理，执行下一次循环。
+2. 如果找到了一个可以被清理的连接，会尝试去寻找闲置时间最久的连接来释放。
+3. 如果空闲连接超过 5 个或者 keepalive 时间大于 5 分钟，则将该连接清理。
+4. 闲置的连接的数量大于 0，返回该连接的到期时间（等会儿会将其清理掉，现在还不是时候）。
+5. 全部都是活跃连接，5 分钟后再进行清理。
+6. 没有任何连接，跳出循环。
+
+若检测发现没有可复用的连接，那么就会创建一个新的Connection，这里涉及到DNS过程。
 
 #### 3.DNS连接
 
+Dns的过程隐藏在了findConnection的Route检查中，整个过程在findConnection方法中写的比较散，可能不是特别好理解，但是只要搞明白了RouteSelector, RouteSelection，Route这三个类的关系，其实就比较容易理解了。
+
+![image-20200702115824438](pics/image-20200702115824438.png)
 
 
-#### 4.连接池复用
 
-#### 
+```
+public Selection next() throws IOException {
+  if (!hasNext()) {
+    throw new NoSuchElementException();
+  }
 
+  // Compute the next set of routes to attempt.
+  List<Route> routes = new ArrayList<>();
+  while (hasNextProxy()) {
+    // Postponed routes are always tried last. For example, if we have 2 proxies and all the
+    // routes for proxy1 should be postponed, we'll move to proxy2. Only after we've exhausted
+    // all the good routes will we attempt the postponed routes.
+    Proxy proxy = nextProxy();
+    for (int i = 0, size = inetSocketAddresses.size(); i < size; i++) {
+      Route route = new Route(address, proxy, inetSocketAddresses.get(i));
+      if (routeDatabase.shouldPostpone(route)) {
+        postponedRoutes.add(route);
+      } else {
+        routes.add(route);
+      }
+    }
 
+    if (!routes.isEmpty()) {
+      break;
+    }
+  }
+
+  if (routes.isEmpty()) {
+    // We've exhausted all Proxies so fallback to the postponed routes.
+    routes.addAll(postponedRoutes);
+    postponedRoutes.clear();
+  }
+
+  return new Selection(routes);
+}
+```
+
+RouteSelector的next方法获取到的是Selection，Selection中封装了一个Route的列表，Route中持有proxy、address和inetAddress，Route中的Proxy和InetSocketAddress（IP地址）是配对的，同一个Proxy会和多个IP配对。
+
+hasNextProxy()方法内部会调用到resetNextInetSocketAddress()方法 ，然后通过address.dns.lookup获取InetSocketAddress，也就是IP地址。
+
+```java
+/** Prepares the socket addresses to attempt for the current proxy or host. */
+private void resetNextInetSocketAddress(Proxy proxy) throws IOException {
+  // Clear the addresses. Necessary if getAllByName() below throws!
+  inetSocketAddresses = new ArrayList<>();
+
+  String socketHost;
+  int socketPort;
+  // 判断代理的类型
+  if (proxy.type() == Proxy.Type.DIRECT || proxy.type() == Proxy.Type.SOCKS) {
+    socketHost = address.url().host();
+    socketPort = address.url().port();
+  } else {
+   // 得到代理的地址
+    SocketAddress proxyAddress = proxy.address();
+    if (!(proxyAddress instanceof InetSocketAddress)) {
+      throw new IllegalArgumentException(
+          "Proxy.address() is not an " + "InetSocketAddress: " + proxyAddress.getClass());
+    }
+    // 得到代理的地址
+    InetSocketAddress proxySocketAddress = (InetSocketAddress) proxyAddress;
+    socketHost = getHostString(proxySocketAddress);
+    socketPort = proxySocketAddress.getPort();
+  }
+ //判断端口号是否合合法
+  if (socketPort < 1 || socketPort > 65535) {
+    throw new SocketException("No route to " + socketHost + ":" + socketPort
+        + "; port is out of range");
+  }
+
+  // 这里是关键，如果代理的类型是Socks，不适用DNS
+  if (proxy.type() == Proxy.Type.SOCKS) {
+    inetSocketAddresses.add(InetSocketAddress.createUnresolved(socketHost, socketPort));
+  } else {
+    eventListener.dnsStart(call, socketHost);
+
+    // Try each address for best behavior in mixed IPv4/IPv6 environments.
+    List<InetAddress> addresses = address.dns().lookup(socketHost);
+    if (addresses.isEmpty()) {
+      throw new UnknownHostException(address.dns() + " returned no addresses for " + socketHost);
+    }
+
+    eventListener.dnsEnd(call, socketHost, addresses);
+
+    for (int i = 0, size = addresses.size(); i < size; i++) {
+      InetAddress inetAddress = addresses.get(i);
+      inetSocketAddresses.add(new InetSocketAddress(inetAddress, socketPort));
+    }
+  }
+}
+```
+
+37行：IP地址最终是通过address的dns获取到的，而这个dns又是怎么构建的呢？
+
+address的dns是transmitter.prepareToConnect时，将内置的client.dns传递进来，而client.dns是OkHttpclient的构建过程中传递进来Dns.System，里面的lookup是通InetAddress.getAllByName 方法获取到对应域名的IP，也就是默认的Dns实现。
+
+```
+public void prepareToConnect(Request request) {
+  if (this.request != null) {
+    if (sameConnection(this.request.url(), request.url()) && exchangeFinder.hasRouteToTry()) {
+      return; // Already ready.
+    }
+    if (exchange != null) throw new IllegalStateException();
+
+    if (exchangeFinder != null) {
+      maybeReleaseConnection(null, true);
+      exchangeFinder = null;
+    }
+  }
+
+  this.request = request;
+  this.exchangeFinder = new ExchangeFinder(this, connectionPool, createAddress(request.url()),
+      call, eventListener);
+}
+```
+
+由于默认的LocalDNS 可能出现被劫持，调度不准确的问题，OkHttp的DNS是支持自定义的DNS的。在构建HttpClient时，通过OkHttpBuild进行设置
+
+```java
+new OkHttpClient.Builder().dns(new HttpDnsImpl())
+```
+
+关于HTTPDNS，请移步[使用 HTTPDNS 优化 DNS，从原理到 OkHttp 集成](https://juejin.im/post/5c98482c5188252d9559247e)
+
+#### 4.Socket连接过程
+
+上一步中通过Dns获得Connectoin之后，下一步就是建立连接的过程。
+
+```java
+public void connect(int connectTimeout, int readTimeout, int writeTimeout,
+    int pingIntervalMillis, boolean connectionRetryEnabled, Call call,
+    EventListener eventListener) {
+...
+  while (true) {
+    try {
+       // 1. https协议使用了HTTP代理,使用隧道
+       // https://juejin.im/post/5d9cc1cff265da5bb86abc8e
+      if (route.requiresTunnel()) {
+        connectTunnel(connectTimeout, readTimeout, writeTimeout, call, eventListener);
+        if (rawSocket == null) {
+          // We were unable to connect the tunnel but properly closed down our resources.
+          break;
+        }
+      } else {
+        connectSocket(connectTimeout, readTimeout, call, eventListener);
+      }
+       // 2.在建立连接之后要进行握手
+      establishProtocol(connectionSpecSelector, pingIntervalMillis, call, eventListener);
+      eventListener.connectEnd(call, route.socketAddress(), route.proxy(), protocol);
+      break;
+    } catch (IOException e) {
+   	  //...
+      if (routeException == null) {
+        routeException = new RouteException(e);
+      } else {
+        routeException.addConnectException(e);
+      }
+
+      if (!connectionRetryEnabled || !connectionSpecSelector.connectionFailed(e)) {
+        throw routeException;
+      }
+    }
+  }
+ ....
+}
+```
+
+关键的步骤有2步：
+
+1.根据是否需要建立隧道调用不同的方法建立socket连接
+
+2.连接后进行握手，establishProtocol 会调用到connectTls方法进行
+
+```
+private void establishProtocol(ConnectionSpecSelector connectionSpecSelector,
+    int pingIntervalMillis, Call call, EventListener eventListener) throws IOException {
+  if (route.address().sslSocketFactory() == null) {
+   // 非HTTPS，支持HTTP2，优先走HTTP2
+    if (route.address().protocols().contains(Protocol.H2_PRIOR_KNOWLEDGE)) {
+      socket = rawSocket;
+      protocol = Protocol.H2_PRIOR_KNOWLEDGE;
+      startHttp2(pingIntervalMillis);
+      return;
+    }
+
+    socket = rawSocket;
+    protocol = Protocol.HTTP_1_1;
+    return;
+  }
+
+  eventListener.secureConnectStart(call);
+  // tls连接
+  connectTls(connectionSpecSelector);
+  eventListener.secureConnectEnd(call, handshake);
+
+  if (protocol == Protocol.HTTP_2) {
+    startHttp2(pingIntervalMillis);
+  }
+}
+```
+
+[SSL/TLS 握手过程详解](https://www.jianshu.com/p/7158568e4867)
+
+[okHttp连接流程](https://blog.csdn.net/fengrui_sd/article/details/79004826)
 
 ### 5.CallServerInterceptor
 
 传输http的头部和body数据。
 
-### 6.interceptors（ApplicationInterceptors）
+完成socket连接和tls连接后，下一步就是传输http的头部和body数据了，主要步骤如下。
+
+1. 写请求头
+2. 创建请求体
+3. 写请求体
+4. 完成请求写入
+5. 读取响应头
+6. 返回响应结果
+
+### 6.ApplicationInterceptor 和 NetWorkInterceptor
+
+前面提到，在OkHttpClient.Builder的构造方法有两个参数，使用者可以通过addInterceptor 和 addNetworkdInterceptor 添加自定义的拦截器，分析完 RetryAndFollowUpInterceptor 我们就可以知道这两种自动拦截器的区别了。
+
+从前面添加拦截器的顺序可以知道 Interceptors 和 networkInterceptors 刚好一个在 RetryAndFollowUpInterceptor 的前面，一个在后面。
+
+结合前面的责任链调用图可以分析出来，假如一个请求在 RetryAndFollowUpInterceptor 这个拦截器内部重试或者重定向了 N 次，那么其内部嵌套的所有拦截器也会被调用N次，同样 networkInterceptors 自定义的拦截器也会被调用 N 次。而相对的 Interceptors 则一个请求只会调用一次，所以在OkHttp的内部也将其称之为 Application Interceptor。 
+
+另外还需要注意的一点是，在执行完ConnectInterceptor之后，其实添加了自定义的网络拦截器networkInterceptors，按照顺序执行的规定，所有的networkInterceptor执行时，socket连接其实已经建立了，可以通过realChain拿到socket做一些事情了，这也就是为什么称之为network Interceptor的原因。
+
+## 三、总结
 
 
 
-### 7.networkInterceptors
+## 四、参考
+
+https://juejin.im/post/5e324e68f265da3e1e0579a8
