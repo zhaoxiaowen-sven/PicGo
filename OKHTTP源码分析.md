@@ -458,7 +458,7 @@ private void testCacheInterceptor(){
 
 负责了Dns解析和Socket连接（包括tls连接）。
 
-#### 1.连接过程
+#### 1.整体流程
 
 ConnectInterceptor 的核心方法是：
 
@@ -488,28 +488,339 @@ ExChange这个对象中最重要的2个属性为RealConnection和ExchangeCodec�
 
 另外还需要注意的一点是，在执行完ConnectInterceptor之后，其实添加了自定义的网络拦截器networkInterceptors，按照顺序执行的规定，所有的networkInterceptor执行时，socket连接其实已经建立了，可以通过realChain拿到socket做一些事情了，这也就是为什么称之为network Interceptor的原因。
 
-#### 2.socket连接
+#### 2.Connection获取
 
-通过前面的分析知道，Socket连接和Dns过程都是在ConnecInterceptor中通过Transmitter和ExchangeFinder来完成的，而在前面的时序图中可以看到，最终建立Socket连接的方法是通过ExchangeFinder的findConnection来完成的。
+Connection中封装了Socket，先看下Connection创建的过程。
 
+##### 1.findConnection
 
+findConnection方法过长，总结了一个流程图
+
+![image-20200702120005621](pics/image-20200702120005621.png)
+
+findConnection这个方法做了以下几件事：
+
+1. 检查当前exchangeFinder所保存的Connection是否满足此次请求
+2. 检查当前连接池ConnectionPool中是否满足此次请求的Connection
+3. 检查当前RouteSelector列表中，是否还有可用Route(Route是proxy,IP地址的包装类)，如果没有就发起DNS请求
+4. 通过DNS获取到新的Route之后，第二次从ConnectionPool查找有无可复用的Connection，否则就创建新的RealConnection
+5. 用RealConnection进行TCP和TLS连接，连接成功后保存到ConnectionPool
+
+##### 2.连接池复用
+
+OkHttp的连接复用其实是通过ConnectionPool来实现的，内部有一个connections的ArrayDeque对象就是用来保存缓存的连接池。findConnection中做了两次复用检查，对应调用的方法是transmitterAcquirePooledConnection。
+
+```java
+boolean transmitterAcquirePooledConnection(Address address, Transmitter transmitter,
+    @Nullable List<Route> routes, boolean requireMultiplexed) {
+  assert (Thread.holdsLock(this));
+  for (RealConnection connection : connections) {
+    if (requireMultiplexed && !connection.isMultiplexed()) continue;
+    if (!connection.isEligible(address, routes)) continue;
+    transmitter.acquireConnectionNoEvents(connection);
+    return true;
+  }
+  return false;
+}
+```
+
+ConnectionPool中通过一个cleanup任务维护缓存大小，在每次新增缓存时触发。
+
+```java
+long cleanup(long now) {
+    int inUseConnectionCount = 0;
+    int idleConnectionCount = 0;
+    RealConnection longestIdleConnection = null;
+    long longestIdleDurationNs = Long.MIN_VALUE;
+
+    // Find either a connection to evict, or the time that the next eviction is due.
+    synchronized (this) {
+      for (Iterator<RealConnection> i = connections.iterator(); i.hasNext(); ) {
+        RealConnection connection = i.next();
+
+        // If the connection is in use, keep searching.
+        if (pruneAndGetAllocationCount(connection, now) > 0) {
+          inUseConnectionCount++;
+          continue;
+        }
+
+        idleConnectionCount++;
+
+        // If the connection is ready to be evicted, we're done.
+        long idleDurationNs = now - connection.idleAtNanos;
+        if (idleDurationNs > longestIdleDurationNs) {
+          longestIdleDurationNs = idleDurationNs;
+          longestIdleConnection = connection;
+        }
+      }
+
+      if (longestIdleDurationNs >= this.keepAliveDurationNs
+          || idleConnectionCount > this.maxIdleConnections) {
+        // We've found a connection to evict. Remove it from the list, then close it below (outside
+        // of the synchronized block).
+        connections.remove(longestIdleConnection);
+      } else if (idleConnectionCount > 0) {
+        // A connection will be ready to evict soon.
+        return keepAliveDurationNs - longestIdleDurationNs;
+      } else if (inUseConnectionCount > 0) {
+        // All connections are in use. It'll be at least the keep alive duration 'til we run again.
+        return keepAliveDurationNs;
+      } else {
+        // No connections, idle or in use.
+        cleanupRunning = false;
+        return -1;
+      }
+    }
+
+    closeQuietly(longestIdleConnection.socket());
+
+    // Cleanup again immediately.
+    return 0;
+  }
+```
+
+总结下流程：
+
+1. 遍历所有连接，查询每个连接的引用数量，如果大于 0，表示连接正在使用，无需清理，执行下一次循环。
+2. 如果找到了一个可以被清理的连接，会尝试去寻找闲置时间最久的连接来释放。
+3. 如果空闲连接超过 5 个或者 keepalive 时间大于 5 分钟，则将该连接清理。
+4. 闲置的连接的数量大于 0，返回该连接的到期时间（等会儿会将其清理掉，现在还不是时候）。
+5. 全部都是活跃连接，5 分钟后再进行清理。
+6. 没有任何连接，跳出循环。
+
+若检测发现没有可复用的连接，那么就会创建一个新的Connection，这里涉及到DNS过程。
 
 #### 3.DNS连接
 
+Dns的过程隐藏在了findConnection的Route检查中，整个过程在findConnection方法中写的比较散，可能不是特别好理解，但是只要搞明白了RouteSelector, RouteSelection，Route这三个类的关系，其实就比较容易理解了。
+
+![image-20200702115824438](pics/image-20200702115824438.png)
 
 
-#### 4.连接池复用
 
-#### 
+```
+public Selection next() throws IOException {
+  if (!hasNext()) {
+    throw new NoSuchElementException();
+  }
 
+  // Compute the next set of routes to attempt.
+  List<Route> routes = new ArrayList<>();
+  while (hasNextProxy()) {
+    // Postponed routes are always tried last. For example, if we have 2 proxies and all the
+    // routes for proxy1 should be postponed, we'll move to proxy2. Only after we've exhausted
+    // all the good routes will we attempt the postponed routes.
+    Proxy proxy = nextProxy();
+    for (int i = 0, size = inetSocketAddresses.size(); i < size; i++) {
+      Route route = new Route(address, proxy, inetSocketAddresses.get(i));
+      if (routeDatabase.shouldPostpone(route)) {
+        postponedRoutes.add(route);
+      } else {
+        routes.add(route);
+      }
+    }
 
+    if (!routes.isEmpty()) {
+      break;
+    }
+  }
+
+  if (routes.isEmpty()) {
+    // We've exhausted all Proxies so fallback to the postponed routes.
+    routes.addAll(postponedRoutes);
+    postponedRoutes.clear();
+  }
+
+  return new Selection(routes);
+}
+```
+
+RouteSelector的next方法获取到的是Selection，Selection中封装了一个Route的列表，Route中持有proxy、address和inetAddress，Route中的Proxy和InetSocketAddress（IP地址）是配对的，同一个Proxy会和多个IP配对。
+
+hasNextProxy()方法内部会调用到resetNextInetSocketAddress()方法 ，然后通过address.dns.lookup获取InetSocketAddress，也就是IP地址。
+
+```java
+/** Prepares the socket addresses to attempt for the current proxy or host. */
+private void resetNextInetSocketAddress(Proxy proxy) throws IOException {
+  // Clear the addresses. Necessary if getAllByName() below throws!
+  inetSocketAddresses = new ArrayList<>();
+
+  String socketHost;
+  int socketPort;
+  // 判断代理的类型
+  if (proxy.type() == Proxy.Type.DIRECT || proxy.type() == Proxy.Type.SOCKS) {
+    socketHost = address.url().host();
+    socketPort = address.url().port();
+  } else {
+   // 得到代理的地址
+    SocketAddress proxyAddress = proxy.address();
+    if (!(proxyAddress instanceof InetSocketAddress)) {
+      throw new IllegalArgumentException(
+          "Proxy.address() is not an " + "InetSocketAddress: " + proxyAddress.getClass());
+    }
+    // 得到代理的地址
+    InetSocketAddress proxySocketAddress = (InetSocketAddress) proxyAddress;
+    socketHost = getHostString(proxySocketAddress);
+    socketPort = proxySocketAddress.getPort();
+  }
+ //判断端口号是否合合法
+  if (socketPort < 1 || socketPort > 65535) {
+    throw new SocketException("No route to " + socketHost + ":" + socketPort
+        + "; port is out of range");
+  }
+
+  // 这里是关键，如果代理的类型是Socks，不适用DNS
+  if (proxy.type() == Proxy.Type.SOCKS) {
+    inetSocketAddresses.add(InetSocketAddress.createUnresolved(socketHost, socketPort));
+  } else {
+    eventListener.dnsStart(call, socketHost);
+
+    // Try each address for best behavior in mixed IPv4/IPv6 environments.
+    List<InetAddress> addresses = address.dns().lookup(socketHost);
+    if (addresses.isEmpty()) {
+      throw new UnknownHostException(address.dns() + " returned no addresses for " + socketHost);
+    }
+
+    eventListener.dnsEnd(call, socketHost, addresses);
+
+    for (int i = 0, size = addresses.size(); i < size; i++) {
+      InetAddress inetAddress = addresses.get(i);
+      inetSocketAddresses.add(new InetSocketAddress(inetAddress, socketPort));
+    }
+  }
+}
+```
+
+37行：IP地址最终是通过address的dns获取到的，而这个dns又是怎么构建的呢？
+
+address的dns是transmitter.prepareToConnect时，将内置的client.dns传递进来，而client.dns是OkHttpclient的构建过程中传递进来Dns.System，里面的lookup是通InetAddress.getAllByName 方法获取到对应域名的IP，也就是默认的Dns实现。
+
+```
+public void prepareToConnect(Request request) {
+  if (this.request != null) {
+    if (sameConnection(this.request.url(), request.url()) && exchangeFinder.hasRouteToTry()) {
+      return; // Already ready.
+    }
+    if (exchange != null) throw new IllegalStateException();
+
+    if (exchangeFinder != null) {
+      maybeReleaseConnection(null, true);
+      exchangeFinder = null;
+    }
+  }
+
+  this.request = request;
+  this.exchangeFinder = new ExchangeFinder(this, connectionPool, createAddress(request.url()),
+      call, eventListener);
+}
+```
+
+由于默认的LocalDNS 可能出现被劫持，调度不准确的问题，OkHttp的DNS是支持自定义的DNS的。在构建HttpClient时，通过OkHttpBuild进行设置
+
+```java
+new OkHttpClient.Builder().dns(new HttpDnsImpl())
+```
+
+关于HTTPDNS，请移步[使用 HTTPDNS 优化 DNS，从原理到 OkHttp 集成](https://juejin.im/post/5c98482c5188252d9559247e)
+
+#### 4.Socket连接过程
+
+上一步中通过Dns获得Connectoin之后，下一步就是建立连接的过程。
+
+```java
+public void connect(int connectTimeout, int readTimeout, int writeTimeout,
+    int pingIntervalMillis, boolean connectionRetryEnabled, Call call,
+    EventListener eventListener) {
+...
+  while (true) {
+    try {
+       // 1. https协议使用了HTTP代理,使用隧道
+       // https://juejin.im/post/5d9cc1cff265da5bb86abc8e
+      if (route.requiresTunnel()) {
+        connectTunnel(connectTimeout, readTimeout, writeTimeout, call, eventListener);
+        if (rawSocket == null) {
+          // We were unable to connect the tunnel but properly closed down our resources.
+          break;
+        }
+      } else {
+        connectSocket(connectTimeout, readTimeout, call, eventListener);
+      }
+       // 2.在建立连接之后要进行握手
+      establishProtocol(connectionSpecSelector, pingIntervalMillis, call, eventListener);
+      eventListener.connectEnd(call, route.socketAddress(), route.proxy(), protocol);
+      break;
+    } catch (IOException e) {
+   	  //...
+      if (routeException == null) {
+        routeException = new RouteException(e);
+      } else {
+        routeException.addConnectException(e);
+      }
+
+      if (!connectionRetryEnabled || !connectionSpecSelector.connectionFailed(e)) {
+        throw routeException;
+      }
+    }
+  }
+ ....
+}
+```
+
+关键的步骤有2步：
+
+1.根据是否需要建立隧道调用不同的方法建立socket连接
+
+2.连接后进行握手，establishProtocol 会调用到connectTls方法进行
+
+```
+private void establishProtocol(ConnectionSpecSelector connectionSpecSelector,
+    int pingIntervalMillis, Call call, EventListener eventListener) throws IOException {
+  if (route.address().sslSocketFactory() == null) {
+   // 非HTTPS，支持HTTP2，优先走HTTP2
+    if (route.address().protocols().contains(Protocol.H2_PRIOR_KNOWLEDGE)) {
+      socket = rawSocket;
+      protocol = Protocol.H2_PRIOR_KNOWLEDGE;
+      startHttp2(pingIntervalMillis);
+      return;
+    }
+
+    socket = rawSocket;
+    protocol = Protocol.HTTP_1_1;
+    return;
+  }
+
+  eventListener.secureConnectStart(call);
+  // tls连接
+  connectTls(connectionSpecSelector);
+  eventListener.secureConnectEnd(call, handshake);
+
+  if (protocol == Protocol.HTTP_2) {
+    startHttp2(pingIntervalMillis);
+  }
+}
+```
+
+[SSL/TLS 握手过程详解](https://www.jianshu.com/p/7158568e4867)
+
+[okHttp连接流程](https://blog.csdn.net/fengrui_sd/article/details/79004826)
 
 ### 5.CallServerInterceptor
 
 传输http的头部和body数据。
 
-### 6.interceptors（ApplicationInterceptors）
+完成socket连接和tls连接后，下一步就是传输http的头部和body数据了。主要步骤如下。
+
+1. 写请求头
+2. 创建请求体
+3. 写请求体
+4. 完成请求写入
+5. 读取响应头
+6. 返回响应结果
+
+## 三、总结
 
 
 
-### 7.networkInterceptors
+## 四、参考
+
+https://juejin.im/post/5e324e68f265da3e1e0579a8
