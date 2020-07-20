@@ -16,9 +16,7 @@ Response response = call.execute();
 
 请求过程中内部调用逻辑如下：
 
-![image-20200615104833772](pics/image-20200615104833772.png)
-
-
+![image-20200720195342044](pics/image-20200720195342044.png)
 
 涉及到的几个核心类：
 
@@ -224,7 +222,15 @@ void executeOn(ExecutorService executorService) {
 
 ## 1、执行顺序
 
-![image-20200612171047967](pics/image-20200612171047967.png)
+拦截器的执行属性是getResponseWithInterceptorChain() 方法中添加的顺序依次为：
+
+- client.Interceptors
+- RetryAndFollowUpInterceptor,
+- BridgeInterceptor
+- CacheInterceptor
+- ConnectInterceptor
+- client.networkInterceptors
+- CallServerInterceptor
 
 
 
@@ -886,8 +892,14 @@ private void establishProtocol(ConnectionSpecSelector connectionSpecSelector,
 
 ## 三、总结
 
+OkHttp的整体架构如图，请求构建时使用了Builder模式，可配置了OkHttpClient属性和Request属性；核心的请求过程应用了职责链模式，最重要的拦截器分别是负责连接的ConnectInterceptor和负责缓存的CacheInterceptor；连接过程中采用了连接池复用，避免频繁的请求和断开；IO传输时使用的是OkIo，提升传输效率。
+
+![image-20200720204713384](pics/image-20200720204713384.png)
+
 
 
 ## 四、参考
 
 https://juejin.im/post/5e324e68f265da3e1e0579a8
+
+https://zhuanlan.zhihu.com/p/116777864
