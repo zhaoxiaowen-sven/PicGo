@@ -3,6 +3,10 @@
 
 [TOC]
 
+OkHttp 作为目前Android平台上广泛使用的开源库，很多没有看过源码的同学可能都是知道怎么用，但是不知道具体的原理。这边文章主要通过分析源码，使大家可以对OkHttp有一个完整和深入的了解。本文会从Okttp的请求流程，拦截器以及架构角度对OkHttp进行总结。选用的Okttp版本是 3.14.x。
+
+[Okhttp]: https://github.com/square/okhttp
+
 # 一、请求流程
 
 常见的OKHttp的请求如下:
@@ -169,9 +173,9 @@ private boolean promoteAndExecute() {
 }
 ```
 
-- 先将任务加入到异步等待队列中，
-- 从准备异步请求的队列中取出可以执行的请求（正在运行的异步请求不得超过64，同一个host下的异步请求不得超过5个），加入到 executableCalls 列表中。
-- 循环 executableCalls 取出请求 AsyncCall 对象，调用其 executeOn 方法。
+- 先将任务加入到异步等待队列中
+- 从准备异步请求的队列中取出可以执行的请求（正在运行的异步请求不得超过64，同一个host下的异步请求不得超过5个），加入到 executableCalls 列表中
+- 循环 executableCalls 取出请求 AsyncCall 对象，调用其 executeOn 方法
 
 ```
 void executeOn(ExecutorService executorService) {
@@ -193,7 +197,7 @@ void executeOn(ExecutorService executorService) {
 }
 ```
 
-5行：执行AsyncCall的Run方法，最终会调用到AsyncCall的execute方法。
+5行：调用AsyncCall的execute方法
 
 ```
 @Override protected void execute() {
@@ -222,7 +226,7 @@ void executeOn(ExecutorService executorService) {
 
 ## 1、执行顺序
 
-拦截器的执行属性是getResponseWithInterceptorChain() 方法中添加的顺序依次为：
+拦截器的执行属性是getResponseWithInterceptorChain() 方法中添加的顺序，依次为：
 
 - client.Interceptors
 - RetryAndFollowUpInterceptor,
@@ -236,23 +240,18 @@ void executeOn(ExecutorService executorService) {
 
 ## 2、拦截器分析
 
-### 1.RetryAndFollowUpInterceptor
+### 1.RetryAndFollowUpInterceptor 
 
-重试和重定向拦截器
+**重试和重定向拦截器**
 
 RetryAndFollowUpInterceptor开启了一个while(true)的循环，并在循环内部完成两个重要的判定：
 
-1. 当请求内部抛出异常时，判定是否需要重试
+1. 当请求内部抛出异常时，判定是否需要重试
 2. 当响应结果是3xx重定向时，构建新的请求并发送请求
 
 ![image-20200605154411274](pics\image-20200605154411274.png)
 
 异常时重试的逻辑相对复杂，有如下的判定逻辑：
-
-1. client的retryOnConnectionFailure参数设置为false，不进行重试
-2. 请求的body已经发出，不进行重试
-3. 特殊的异常类型不进行重试（如ProtocolException，SSLHandshakeException等）
-4. 没有更多的route（包含proxy和inetaddress），不进行重试。
 
 ```java
 private boolean recover(IOException e, Transmitter transmitter,
@@ -274,13 +273,16 @@ private boolean recover(IOException e, Transmitter transmitter,
 }
 ```
 
+1. client的retryOnConnectionFailure参数设置为false，不进行重试
+2. 请求的body已经发出，不进行重试
+3. 特殊的异常类型不进行重试（如ProtocolException，SSLHandshakeException等）
+4. 没有更多的route（包含proxy和inetaddress），不进行重试。
+
 ### 2.BridgeInterceptor
 
-请求时为Requsest拼接必要的HEADER属性；服务器响应返回后，对响应进行gzip解压。
+**请求时为Requsest拼接必要的Header属性；服务器响应返回后，对响应进行gzip解压。**
 
 ![image-20200605170334063](pics/image-20200605170334063.png)
-
-主要流程：
 
 1. 设置请求和响应报文HEADER信息，User-Agent，Content-Type，Host，Keep-Alive等等。
 2. 添加和保存cookie
@@ -292,7 +294,7 @@ private boolean recover(IOException e, Transmitter transmitter,
 
 ### 3.CacheInterceptor
 
-负责缓存数据的读取、解析和更新。
+**负责缓存数据的读取、解析和更新。**
 
 #### 3.1 处理流程
 
@@ -306,7 +308,7 @@ private boolean recover(IOException e, Transmitter transmitter,
 
 #### 3.2 Http缓存
 
-再介绍Okttp的缓存读取逻辑前，需要先补充一些Http头字段中和缓存相关的知识。
+在介绍Okttp的缓存读取逻辑前，需要先补充一些Http头字段中和缓存相关的知识。
 
 [OKHTTP之缓存配置详解]: https://blog.csdn.net/briblue/article/details/52920531
 
@@ -397,9 +399,9 @@ private CacheStrategy getCandidate() {
 }
 ```
 
-#### 3.4 App实践
+#### 3.4 实践
 
-OkHttp缓存保存到本地时使用的是DiskLrucache，仅限于**GET请求**才能使用。若要对POST请求进行缓存，需要通过自定义拦截器的方式实现。下面先介绍下OkHttp推荐的缓存拦截器配置和使用方式。
+OkHttp缓存保存到本地时使用的是DiskLrucache，仅限于**GET请求**才能使用。常见的配置和使用方式有2种分别是okHttp推荐的CacheControl和自定义拦截器的方式。下面先介绍下CahceControl。
 
 ##### 1.CacheControl 配置缓存
 
@@ -470,17 +472,14 @@ Request request = new Request.Builder()
 
 ##### 2.自定义缓存拦截器
 
-推荐的缓存拦截器只能对GET请求进行拦截，如果是POST请求该如何进行拦截呢，这就需要用到自定义拦截器了。
+推荐的缓存拦截器只能对GET请求进行拦截，对于其他方式的请求是不支持的，比如Post，还有一种情况就是客户端和服务器没有约定好协议，比如控制缓存的消息头往往是服务端返回的信息中添加的如”Cache-Control:max-age=60”。所以，会有两种情况。
 
-1、请求和响应的消息头中增加缓存配置
-
-控制缓存的消息头往往是服务端返回的信息中添加的如”Cache-Control:max-age=60”。所以，会有两种情况。
 1. 客户端和服务端开发能够很好沟通，按照达成一致的协议，服务端按照规定添加缓存相关的消息头。
 2. 客户端与服务端的开发根本就不是同一家公司，没有办法也不可能要求服务端按照客户端的意愿进行开发。
 
 第一种办法当然很好，只要服务器在返回消息的时候添加好Cache-Control相关的消息便好。
 
-第二种情况，就很麻烦，你真的无法左右别人的行为。怎么办呢？好在OKHTTP能够很轻易地处理这种情况。那就是定义一个拦截器，人为地添加Response中的消息头，然后再传递给用户，这样用户拿到的Response就有了我们理想当中的消息头Headers，从而达到控制缓存的意图，正所谓移花接木。
+第二种情况，就很麻烦，你真的无法左右别人的行为。怎么办呢？那就需要自定义一个拦截器，为返回Response添加消息头，然后再传递给用户，这样用户拿到的Response就有了我们理想当中的消息头Headers，从而达到控制缓存的意图，正所谓移花接木。
 
 ```
 class CacheInterceptor implements Interceptor {
@@ -505,8 +504,8 @@ private void testCacheInterceptor(){
                 .addNetworkInterceptor(new CacheInterceptor())
                 .cache(cache)
                 .build();
-        // 请求头中增加缓存信息，貌似没必要？？？        
-        Request request = new Request.Builder().url(url).header("Cache-Control", "max-age=60").build();
+         // Request 中不要去设置禁止缓存，否则缓存就不生效了
+        Request request = new Request.Builder().url(url).build();
         .......
 }
 ```
@@ -871,7 +870,7 @@ private void establishProtocol(ConnectionSpecSelector connectionSpecSelector,
 
 传输http的头部和body数据。
 
-完成socket连接和tls连接后，下一步就是传输http的头部和body数据了，主要步骤如下。
+完成socket连接和tls连接后，下一步就是传输http的头部和body数据了，主要步骤如下：
 
 1. 写请求头
 2. 创建请求体
@@ -879,6 +878,8 @@ private void establishProtocol(ConnectionSpecSelector connectionSpecSelector,
 4. 完成请求写入
 5. 读取响应头
 6. 返回响应结果
+
+主要实现根据不同的ConnectInterceptor 中返回的ExchangeCodec协议执行Http2或Http1的协议。
 
 ### 6.ApplicationInterceptor 和 NetWorkInterceptor
 
