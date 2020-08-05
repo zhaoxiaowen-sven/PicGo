@@ -899,7 +899,7 @@ long cleanup(long now) {
 
 另外还需要注意的一点是，在执行完ConnectInterceptor之后，其实添加了自定义的网络拦截器networkInterceptors，按照顺序执行的规定，所有的networkInterceptor执行时，socket连接其实已经建立了，可以通过realChain拿到socket做一些事情了，这也就是为什么称之为network Interceptor的原因。
 
-## 三、总结
+# 三、总结
 
 OkHttp的整体架构如图，请求构建时使用了Builder模式，可配置了OkHttpClient属性和Request属性；核心的请求过程应用了职责链模式，最重要的拦截器分别是负责连接的ConnectInterceptor和负责缓存的CacheInterceptor；连接过程中采用了连接池复用，避免频繁的请求和断开；IO传输时使用的是OkIo，提升传输效率。
 
@@ -907,7 +907,7 @@ OkHttp的整体架构如图，请求构建时使用了Builder模式，可配置�
 
 
 
-## 四、参考
+# 四、参考
 
 [OkHttp 4源码](https://juejin.im/post/5e324e68f265da3e1e0579a8)
 
