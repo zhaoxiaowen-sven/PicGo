@@ -229,14 +229,12 @@ void executeOn(ExecutorService executorService) {
 拦截器的执行属性是getResponseWithInterceptorChain() 方法中添加的顺序，依次为：
 
 - client.Interceptors
-- RetryAndFollowUpInterceptor,
+- RetryAndFollowUpInterceptor
 - BridgeInterceptor
 - CacheInterceptor
 - ConnectInterceptor
 - client.networkInterceptors
 - CallServerInterceptor
-
-
 
 ## 2.拦截器分析
 
