@@ -1009,7 +1009,7 @@ optional ：需要手动添加classPath
 
 gradle 3.0之前
 
-```
+```groovy
 applicationVariants.all { variant ->
         variant.outputs.each { output ->
             if (output.outputFile != null && output.outputFile.name.endsWith('.apk')) {
@@ -1022,7 +1022,7 @@ applicationVariants.all { variant ->
 
 gradle 3.0之后
 
-```
+```groovy
 applicationVariants.all { variant ->
         variant.outputs.all { 
             outputFileName = "apptest_${flavorName}_${variant.versionName}_${buildTime()}.apk"
