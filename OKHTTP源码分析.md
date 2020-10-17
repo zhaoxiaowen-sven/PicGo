@@ -13,12 +13,12 @@ OkHttp 作为目前Android平台上广泛使用的开源库，很多没有看过
 
 ```java
 Request request = new Request.Builder().url(url).build();
-OkHttpClient client = new OkHttpClient();
+OkHttpClient client = new OkHttpClient.Builder().build();
 Call call = client.newCall(request);
 Response response = call.execute();
 ```
 
-请求过程中内部调用逻辑如下：
+请求过程中内部调用逻辑：
 
 ![image-20200720195342044](pics/image-20200720195342044.png)
 
@@ -50,7 +50,8 @@ OKHttp支持是同步和异步请求的，下面分析下同步和异步请求�
 同步请求调用的是RealCall.execute()方法。
 
 ```java
-@Override public Response execute() throws IOException {
+@Override 
+public Response execute() throws IOException {
   synchronized (this) {
     if (executed) throw new IllegalStateException("Already Executed");
     executed = true;
@@ -117,7 +118,7 @@ Response getResponseWithInterceptorChain() throws IOException {
 
 18行：执行RealInterceptorChain 的 proceed方法
 
-拦截器执行是递归执行的，每个拦截器有2个作用：
+拦截器执行是**递归执行**的，每个拦截器有2个作用：
 
 - 拦截上一层拦截器封装好的 Request，然后自身对这个 Request 进行处理，处理后向下传递。
 - 接收下一层拦截器传递回来的 Response，然后自身对 Response 进行处理，返回给上一层。
@@ -127,7 +128,8 @@ Response getResponseWithInterceptorChain() throws IOException {
 异步请求调用的是 RealCall.enqueue()方法。
 
 ```java
-@Override public void enqueue(Callback responseCallback) {
+@Override 
+public void enqueue(Callback responseCallback) {
   synchronized (this) {
     if (executed) throw new IllegalStateException("Already Executed");
     executed = true;
@@ -249,7 +251,7 @@ RetryAndFollowUpInterceptor开启了一个while(true)的循环，并在循环内
 
 ![image-20200605154411274](pics\image-20200605154411274.png)
 
-异常时重试的逻辑相对复杂，有如下的判定逻辑：
+Route或IO异常时重试的逻辑相对复杂，有如下的判定逻辑：
 
 ```java
 private boolean recover(IOException e, Transmitter transmitter,
@@ -401,9 +403,9 @@ OkHttp缓存保存到本地时使用的是DiskLrucache，仅限于**GET请求**�
 
 可以针对每个请求设置不同的缓存策略：
 
-1. 网络访问请求的资源是文本信息，如新闻列表，这类信息经常变动，一天更新好几次，它们用的缓存时间应该就很短。
+1. 网络访问请求的资源是文本信息，如新闻列表，这类信息经常变动，一天更新好几次，它们用的缓存时间应该就很短；
 
-2. 网络访问请求的资源是图片或者视频，它们变动很少，或者是长期不变动，那么它们用的缓存时间就应该很长
+2. 网络访问请求的资源是图片或者视频，它们变动很少，或者是长期不变动，那么它们用的缓存时间就应该很长。
 
 1、定义缓存文件
 
@@ -434,8 +436,8 @@ CacheControl cacheControl = new CacheControl.Builder()
     .build();
 Request request = new Request.Builder()
     .url(url)
-    .cacheControl(cacheControl
-    ).build();
+    .cacheControl(cacheControl)
+    .build();
 ... 省略请求过程    
 ```
 
@@ -514,7 +516,7 @@ private void testCacheInterceptor(){
 
 ### 4.ConnectInterceptor
 
-**负责了Dns解析和Socket连接（包括tls连接）。**
+**负责了Dns解析和Socket连接。**
 
 #### 1.整体流程
 
@@ -612,7 +614,7 @@ public Selection next() throws IOException {
 }
 ```
 
-RouteSelector的next方法获取到的是Selection，Selection中封装了一个Route的列表，Route中持有proxy、address和netAddress，Route中的Proxy和InetSocketAddress（IP地址）是配对的，同一个Proxy，address会和多个IP配对。
+RouteSelector的next方法获取到的是Selection，Selection中封装了一个Route的列表，Route中持有proxy、address和InetSocketAddress，Route中的Proxy和InetSocketAddress（IP地址）是配对的，同一个Proxy，address会和多个IP配对。
 
 hasNextProxy()方法内部会调用到resetNextInetSocketAddress()方法 ，然后通过address.dns.lookup获取InetSocketAddress，也就是IP地址。
 
