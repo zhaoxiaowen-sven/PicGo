@@ -246,8 +246,8 @@ void executeOn(ExecutorService executorService) {
 
 RetryAndFollowUpInterceptor开启了一个while(true)的循环，并在循环内部完成两个重要的判定：
 
-1. 当请求内部抛出异常时，判定是否需要重试
-2. 当响应结果是3xx重定向时，构建新的请求并发送请求
+1. **当请求内部抛出异常时，判定是否需要重试**
+2. **当响应结果是3xx重定向时，构建新的请求并发送请求**
 
 ![image-20200605154411274](pics\image-20200605154411274.png)
 
@@ -290,7 +290,9 @@ private boolean recover(IOException e, Transmitter transmitter,
 
 ![image-20200721100439562](pics/image-20200721100439562.png)
 
+最佳实践：
 
+通过自定义拦截器将公共参数统一管理，对于异步请求，拦截器的参数添加都是在线程里的，降低可能的耗时操作
 
 ### 3.CacheInterceptor
 
@@ -518,6 +520,8 @@ private void testCacheInterceptor(){
 
 **负责了Dns解析和Socket连接。**
 
+https://segmentfault.com/a/1190000014044351
+
 #### 1.整体流程
 
 ConnectInterceptor 的核心方法是：
@@ -526,16 +530,14 @@ ConnectInterceptor 的核心方法是：
 Exchange exchange = transmitter.newExchange(chain, doExtensiveHealthChecks);
 ```
 
-负责整个网络连接建立的过程，包括dns以及socket连接过程。
-
 ![image-20200701115151248](pics/image-20200701115151248.png)
 
-用的时序图，梳理出关键步骤：
+关键步骤：
 
 1. ConnectInterceptor调用transmitter.newExchange
 2. Transmitter先调用ExchangeFinder的find()获得ExchangeCodec
-3. ExchangeFinder调用自身的findHealthConnectio获得RealConnection
-4. ExchangeFinder通过刚才获取的RealConnection的codec()方法获得ExchangeCodec
+3. **ExchangeFinder调用自身的findHealthConnectio获得RealConnection**
+4. **ExchangeFinder通过刚才获取的RealConnection的codec()方法获得ExchangeCodec**
 5. Transmitter获取到了ExchangeCodec，然后new了一个ExChange，将刚才的ExchangeCodec包含在内
 
 通过以上5步，最终获取到一个ExChange对象。
@@ -548,7 +550,7 @@ ExChange这个对象中最重要的2个属性为RealConnection和ExchangeCodec�
 
 #### 2.findConnection
 
-findConnection方法过长，总结了一个流程图
+Dns解析和Socket连接都在findConnection方法中，除此之外，这里还涉及到连接池的复用，总结了一个流程图
 
 ![image-20200721105749245](pics/image-20200721105749245.png)
 
@@ -557,8 +559,8 @@ findConnection这个方法做了以下几件事：
 1. 检查当前exchangeFinder所保存的Connection是否满足此次请求
 2. 检查当前连接池ConnectionPool中是否满足此次请求的Connection
 3. 检查当前RouteSelector列表中，是否还有可用Route(Route是proxy,IP地址的包装类)，如果没有就发起DNS请求
-4. 通过DNS获取到新的Route之后，第二次从ConnectionPool查找有无可复用的Connection，否则就创建新的RealConnection
-5. 用RealConnection进行TCP和TLS连接，连接成功后保存到ConnectionPool
+4. **通过DNS获取到新的Route之后**，第二次从ConnectionPool查找有无可复用的Connection，否则就创建新的RealConnection
+5. **用RealConnection进行TCP和TLS连接**，连接成功后保存到ConnectionPool
 
 #### 3.DNS连接
 
@@ -698,7 +700,7 @@ private Address createAddress(HttpUrl url) {
 }
 ```
 
-由于默认的LocalDNS 可能出现被劫持，调度不准确的问题，OkHttp的DNS是支持自定义的DNS的。目前比较成熟解决方案是在构建HttpClient时，通过OkHttpBuilder进行设置HttpDns。
+**由于默认的LocalDNS 可能出现被劫持，调度不准确的问题，OkHttp的DNS是支持自定义的DNS的。目前比较成熟解决方案是在构建HttpClient时，通过OkHttpBuilder进行设置HttpDns**。
 
 ```java
 new OkHttpClient.Builder().dns(new HttpDnsImpl())
@@ -756,9 +758,9 @@ public void connect(int connectTimeout, int readTimeout, int writeTimeout,
 
 关键的步骤有2步：
 
-1.根据是否需要建立隧道调用不同的方法建立socket连接，[深究OKHttp之隧道](https://juejin.im/post/5d9cc1cff265da5bb86abc8e)
+**1.根据是否需要建立隧道调用不同的方法建立socket连接，[深究OKHttp之隧道](https://juejin.im/post/5d9cc1cff265da5bb86abc8e)**
 
-2.连接后进行握手，establishProtocol 会调用到connectTls方法进行
+**2.连接后进行握手，establishProtocol 会调用到connectTls方法进行**
 
 ```java
 private void establishProtocol(ConnectionSpecSelector connectionSpecSelector,
@@ -901,7 +903,7 @@ long cleanup(long now) {
 
 # 三、总结
 
-OkHttp的整体架构如图，请求构建时使用了Builder模式，可配置了OkHttpClient属性和Request属性；核心的请求过程应用了职责链模式，最重要的拦截器分别是负责连接的ConnectInterceptor和负责缓存的CacheInterceptor；连接过程中采用了连接池复用，避免频繁的请求和断开；IO传输时使用的是OkIo，提升传输效率。
+OkHttp的整体架构如图，请求构建时使用了**Builder模式**，可配置了OkHttpClient属性和Request属性；核心的请求过程应用了**职责链模式**，最重要的拦截器分别是负责连接的ConnectInterceptor和负责缓存的CacheInterceptor；连接过程中采用了连接池复用，避免频繁的请求和断开；IO传输时使用的是OkIo，提升传输效率。
 
 ![image-20200720204713384](pics/image-20200720204713384.png)
 
