@@ -6,9 +6,7 @@
 
 # 2、注解介绍
 
-## 2.1、请求
-
-#### 1、请求方法
+## 2.1、请求方法
 
 | 注解名  | 参数说明                                                     |
 | ------- | ------------------------------------------------------------ |
@@ -22,7 +20,7 @@
 
 [HTTP请求方法](https://itbilu.com/other/relate/EkwKysXIl.html)
 
-#### 2、标记类
+## 2.2、标记类
 
 | 注解名         | 参数                                                         |
 | -------------- | ------------------------------------------------------------ |
@@ -32,7 +30,9 @@
 
 [HTTP content-type](https://www.runoob.com/http/http-content-type.html)
 
-#### 3、参数类
+## 2.3、参数类
+
+### 2.3.1、注解说明
 
 | 注解名    | 说明                                                         |
 | --------- | ------------------------------------------------------------ |
@@ -50,6 +50,8 @@
 | Body      | 多个不同类型的参数，使用对象包裹参数，包括文件上传时需要的参数，**不能和FormUrlEncoded及Multipart同时使用** |
 | Tag       | 给这次请求打个Tag，https://stackoverflow.com/questions/42066885/retrofit-adding-tag-to-the-original-request-object |
 
+### 2.3.2、文件上传
+
 文件上传时有2种方式 RequestBody  和 MultiPart使用？？？
 
 ![image-20201208170446774](pics/image-20201208170446774.png)
@@ -66,9 +68,9 @@
 
 # 3、请求创建流程
 
-1、使用动态代理方式创建一个请求接口代理对象
+## 3.1、Retrofit.create
 
-​       InvocationHandler 中定义了代理的规则，**在调用到方法时**，解析方法的注解中的参数，生成对应的ServiceMethod对象，再执行方法的参数。
+使用动态代理方式创建一个请求接口代理对象，InvocationHandler 中定义了代理的规则，**在调用到方法时**，解析方法的注解中的参数，生成对应的ServiceMethod对象，再执行方法的参数。
 
 ```java
 public <T> T create(final Class<T> service) {
@@ -99,9 +101,9 @@ public <T> T create(final Class<T> service) {
 }
 ```
 
-2、loadServiceMethod
+## 3.2、loadServiceMethod
 
-​      loadServiceMethod的主要作用是根据相关注解，生成对应的ServiceMethod对象。
+根据方法的相关注解，生成对应的ServiceMethod对象。
 
 ```java
 ServiceMethod<?> loadServiceMethod(Method method) {
@@ -141,7 +143,7 @@ private void validateServiceInterface(Class<?> service) {
 }
 ```
 
-3、ServiceMethod.parseAnnotations
+## 3.3、ServiceMethod.parseAnnotations
 
 ```java
 static <T> ServiceMethod<T> parseAnnotations(Retrofit retrofit, Method method) {
@@ -165,7 +167,27 @@ static <T> ServiceMethod<T> parseAnnotations(Retrofit retrofit, Method method) {
 
 parseAnnotations 中主要的方法有2个，先来看第一个。
 
-4、RequestFactory.parseAnnotations
+### 3.3.1、RequestFactory.parseAnnotations
+
+通过解析方法注解和方法中的参数注解生成一个RequestFactory对象，包含请求设定的参数。我们先看一下RequestFactory中有哪些对象。
+
+```java
+RequestFactory(Builder builder) {
+  method = builder.method;
+  baseUrl = builder.retrofit.baseUrl;
+  httpMethod = builder.httpMethod;
+  relativeUrl = builder.relativeUrl;
+  headers = builder.headers;
+  contentType = builder.contentType;
+  hasBody = builder.hasBody;
+  isFormEncoded = builder.isFormEncoded;
+  isMultipart = builder.isMultipart;
+  parameterHandlers = builder.parameterHandlers;
+  isKotlinSuspendFunction = builder.isKotlinSuspendFunction;
+}
+```
+
+parseAnnotations负责创建RequestFactory对象，创建时使用了Builder模式。
 
 ```java
 static RequestFactory parseAnnotations(Retrofit retrofit, Method method) {
@@ -228,7 +250,7 @@ RequestFactory build() {
 }
 ```
 
-### 4.1 parseMethodAnnotation
+#### 1、parseMethodAnnotation
 
 ​       解析方法上的注解，主要是请求方式，HEADER等，这里可以确定哪些注解是可以作用到方法上的。
 
@@ -311,7 +333,7 @@ private void parseHttpMethodAndPath(String httpMethod, String value, boolean has
     }
 ```
 
-### 4.2 parseParameterAnnotation
+#### 2、parseParameterAnnotation
 
 ​         根据不同的注解类型，生成对应的ParameterHandler，通过ParameterHandler将相关参数赋值到请求里。
 
@@ -400,10 +422,55 @@ else if (annotation instanceof QueryName) {
         retrofit.stringConverter(arrayComponentType, annotations);
     return new ParameterHandler.QueryName<>(converter, encoded).array();
   } else {
+    // 3、其他
     Converter<?, String> converter = retrofit.stringConverter(type, annotations);
     return new ParameterHandler.QueryName<>(converter, encoded);
   }
 // 省略...
+```
+
+### 3.3.2、HttpServiceMethod.parseAnnotations
+
+精简完的核心代码如下
+
+```java
+static <ResponseT, ReturnT> HttpServiceMethod<ResponseT, ReturnT> parseAnnotations(
+    Retrofit retrofit, Method method, RequestFactory requestFactory) {
+   //...省略
+   adapterType = method.getGenericReturnType();
+  //1.根据网络请求接口方法的返回值和注解类型得到响应类型
+  CallAdapter<ResponseT, ReturnT> callAdapter =
+      createCallAdapter(retrofit, method, adapterType, annotations);
+  Type responseType = callAdapter.responseType();
+  
+  //...
+
+  //2.根据网络请求接口方法的响应类型从Retrofit对象中获取对应的数据转换器 
+  Converter<ResponseBody, ResponseT> responseConverter =
+      createResponseConverter(retrofit, method, responseType);
+
+  okhttp3.Call.Factory callFactory = retrofit.callFactory;
+	// 3、
+    return new CallAdapted<>(requestFactory, callFactory, responseConverter, callAdapter);
+  
+}
+```
+
+#### 1、createCallAdapter
+
+
+
+#### 2、createResponseConverter
+
+# 4、请求执行过程
+
+## 4.1、HttpServiceMethod.invoke
+
+```java
+final @Nullable ReturnT invoke(Object[] args) {
+  Call<ResponseT> call = new OkHttpCall<>(requestFactory, args, callFactory, responseConverter);
+  return adapt(call, args);
+}
 ```
 
 
