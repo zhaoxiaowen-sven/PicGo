@@ -78,41 +78,138 @@ SHA1-Digest: mYQig54fsd3pTRQTmTwMD2oO5CM=
 
 ### 2.1.3、CERT.RSA
 
-**对CERT.SF 文件的摘要通过私钥加密生成校验串**, 然后将**数字签名**以及包含**数字证书**一同写入 CERT.RSA 中保存。很多文章将校验串描述成签名，这样的理解是不准确的
+**对CERT.SF 文件的摘要通过私钥加密生成校验串**, 然后和**数字签名、公钥、数字证书**一同写入 CERT.RSA 中保存。很多文章将校验串描述成签名，这样的理解是不准确的。可以比较2个同一个公司出品的apk的RSA文件，你会发现可能除了结尾部分不太一样外，其他部分基本相同，原因其实就是同一个公司出品的apk，它的签名，证书，公钥通常都是相同的，只有通过私钥加密的CERT.SF的摘要不同。 如下图：
 
-**公钥：**
+![image-20201217160514944](pics/image-20201217160514944.png)
 
-![image-20201216183713539](pics/image-20201216183713539.png)
+#### 1、查看证书与公钥
 
-**签名信息：** keytool -printcert -file xxx.RSA
+1、将.rsa 后缀改为.p7b文件，双击直接打开
 
-![image-20201216181554540](pics/image-20201216181554540.png)
+2、openssl 命令查看证书信息（公钥在证书信息中）
 
-![image-20201216184420093](pics/image-20201216184420093.png)
+```
+// 查看.RSA文件中证书信息
+openssl pkcs7 -inform DER -in XXX.RSA -noout -print_certs -text
+
+// 查看本地证书的公钥和私钥
+keytool -list -rfc --keystore test.jks | openssl x509 -inform pem -pubkey
+```
+
+通过一个实例去理解一下这两种方式的区别和联系。
+
+1. 使用AS或keytool生成一个.jks签名文件； [Android studio 如何生成jks签名文件](https://www.jianshu.com/p/b28a5be05029)
+2. 使用签名文件对apk进行签名；
+3. 通过相关命令查看.jks文件以及解压apk中的.rsa 文件。
+
+![image-20201217162850396](pics/image-20201217162850396.png)
+
+#### 2、查看签名
+
+其实能看到也是签名的摘要，不是真正的签名。
+
+1. 将.rsa 后缀改为.p7b文件，双击直接打开
+2. 使用keytool的命令查看.RSA文件
+
+```
+keytool -printcert -file xxx.RSA
+```
 
 **证书信息：**
 
-```
-openssl pkcs7 -inform DER -in XXX.RSA -noout -print_certs -text
+![image-20201217163225037](pics/image-20201217163225037.png)
 
-openssl x509 -in xxx.pem -text -noout
-```
+## 2.2、v1签名和验签的源码
 
-![image-20201216180905733](pics/image-20201216180905733.png)
+#### 2.2.1、v1签名
 
-具体过程可参考[apksigner源码](https://android.googlesource.com/platform/build/+/7e447ed/tools/signapk/SignApk.java)
+[apksigner源码](https://android.googlesource.com/platform/build/+/7e447ed/tools/signapk/SignApk.java)
 
- keytool -printcert -file FUNNYGAL.RSA
+#### 2.2.2、验签源码
+
+[验签源码](https://android.googlesource.com/platform/frameworks/base/+/android-5.1.1_r38/services/core/java/com/android/server/pm/PackageManagerService.java)
+
+## 2.3 v1签名的劣势
+
+1. 签名校验速度慢
+
+   校验过程中需要对apk中所有文件进行摘要计算，在apk资源很多、性能较差的机器上签名校验会花费较长时间，导致安装速度慢；
+
+2. 完整性保障不够
+
+   META-INF目录用来存放签名，自然此目录本身是不计入签名校验过程的，可以随意在这个目录中添加文件，比如一些快速批量打包方案就选择在这个目录中添加渠道文件。
+
+   为了解决这两个问题，Android 7.0推出了全新的签名方案V2，下面介绍下v2签名。
 
 # 2、V2签名
 
-2.1 APK的文件结构
+## 2.1 ZIP文件结构
+
+![image-20201217175101791](pics/image-20201217175101791.png)
 
 
 
-2.2 v2 签名过程
+zip文件分为3部分：
+
+1. **数据区**
+
+   主要存放压缩的文件数据
+
+2. **中央目录**
+
+   存放数据区压缩文件的索引
+
+3. **中央目录结尾记录**
+
+   存放中央目录的文件索引
+
+查找压缩文件中数据可以先中央目录起始偏移量和size即可定位到中央目录，再遍历中央目录条目，根据本地文件头的起始偏移量即可在数据区中找到相应数据。
+
+## 2.2 v2签名的原理
+
+JAR签名是在apk文件中添加META-INF目录，即需要修改数据区、中央目录，此外，添加文件后会导致中央目录大小和偏移量发生变化，还需要修改中央目录结尾记录。V2方案为加强数据完整性保证，不在数据区和中央目录中插入数据，选择在 数据区和中央目录之间插入一个APK签名分块，从而保证了原始数据的完整性。
+
+![image-20201217174414400](pics/image-20201217174414400.png)
 
 
+
+### 2.2.1、APK Signing Block 数据结构
+
+![image-20201217212653708](pics/image-20201217212653708.png)
+
+APK签名分块包含了4部分：分块长度、ID-VALUE序列、分块长度、固定magic值。其中APK 签名方案 v2分块存放在ID为**0x7109871a**的键值对中
+
+### 2.2.2 v2 Block
+
+v2签名区位于
+
+### 2.2.2、Apk摘要计算
+
+![image-20201217202801891](pics/image-20201217202801891.png)
+
+第 1、3 和 4 部分的摘要采用以下计算方式：
+
+1. 将APK拆分成多个大小为 1 MB大小的连续块，最后一个块可能小于1M。之所以分块，是为了可以通过并行计算摘要以加快计算速度；
+2. 计算块的摘要，以字节 0xa5 + 块的长度（字节数） + 块的内容 进行计算；
+3. 计算整体摘要，字节 0x5a + 块数 + 块的摘要的连接（按块在 APK 中的顺序）进行计算。
+
+注意：由于第 4 部分（ZIP 中央目录结尾）包含“ZIP 中央目录”的偏移量，因此该部分的保护比较复杂。当“APK 签名分块”的大小发生变化（例如，添加了新签名）时，偏移量也会随之改变。因此，在通过“ZIP 中央目录结尾”计算摘要时，必须将包含“ZIP 中央目录”偏移量的字段视为包含“APK 签名分块”的偏移量。
+
+计算完的摘要经过私钥加密写入签名块。
+
+
+
+2.3 v2 签名过程
+
+
+
+![image-20201217210706073](pics/image-20201217210706073.png)
+
+在进行签名校验时，
+
+1. 找到zip中央目录结尾记录，从该记录中找到中央目录起始偏移量，
+2. 通过magic值（APK Sig Block 42）即可确定前方可能是APK签名分块，再通过前后两个分块长度字段，即可确定APK签名分块的位置
+3. 通过ID（0x7109871a）定位APK 签名方案 v2分块位置。
 
 2.3 v2 验签过程
 
