@@ -34,25 +34,27 @@ android应用在安装过程中会对apk进行签名校验，主要用于验证a
 2. 计算摘要：使用摘要算法从接收的数据中计算摘要；
 3. 比较摘要：比较解密出的摘要和通过文件计算的摘要，若一致，则校验通过。
 
-接下来介绍下现有的几种apk签名的方式。
+接下来介绍下现有的4种apk签名的方式。
 
 # 2、v1 签名
 
 V1签名又称为JAR签名，是对jar包进行签名的一种机制，由于jar包apk本质上都是zip包，所以可以应用到对apk的签名。解压apk后，META-INF目录中存放的就是签名相关的文件。
 
-## 2.1 META-INF
+## 2.1 v1签名过程
 
-META-INF 文件夹下有三个文件：MANIFEST.MF、CERT.SF、CERT.RSA。它们就是签名过程中生成的文件，作用如下。
+![image-20201221200634926](../GITNOTE/Notes/pics/image-20201221200634926.png)
+
+MANIFEST.MF、CERT.SF、CERT.RSA是签名过程中生成的文件（[apksigner源码](https://android.googlesource.com/platform/build/+/7e447ed/tools/signapk/SignApk.java)），作用如下：
 
 ### 2.1.1、MANIFEST.MF
 
 对APK中所有文件计算摘要保存到该文件中。
 
-```
+```java
 Manifest-Version: 1.0
 Created-By: 1.8.0_212 (Oracle Corporation)
 
-Name: AndroidManifest.xml
+Name: AndroidManifest.xml //apk各个文件的摘要
 SHA1-Digest: GpiU1HOPO9rxpTPh43kG1XVG8iw=
 
 Name: META-INF/BdTuringSdk_cnRelease.kotlin_module
@@ -62,18 +64,18 @@ SHA1-Digest: PVHPdoZ9+09Zq0PF+eJz0yRVf10=
 
 ### 2.1.2、CERT.SF
 
-- SHA1-Digest-Manifest-Main-Attributes：对 MANIFEST.MF 头部计算摘要。
-- SHA1-Digest-Manifest：对 MANIFEST.MF 文件计算摘要。
-- SHA1-Digest：对 MANIFEST.MF 的各个条目计算摘要。
+- SHA1-Digest-Manifest-Main-Attributes：MANIFEST.MF主属性的数据摘要。
+- SHA1-Digest-Manifest： MANIFEST.MF 文件计算摘要。
+- SHA1-Digest：MANIFEST.MF 的各个条目摘要。
 
-```
+```java
 Signature-Version: 1.0
-SHA1-Digest-Manifest-Main-Attributes: TN5zBsqBLAij6alOeMWe+Ejwd4g=
-SHA1-Digest-Manifest: PBUX5Kag9TIOJy4jZ57vwuAur1Y=
+SHA1-Digest-Manifest-Main-Attributes: TN5zBsqBLAij6alOeMWe+Ejwd4g= //主属性记录了MANIFEST.MF文件所有主属性的数据摘要
+SHA1-Digest-Manifest: PBUX5Kag9TIOJy4jZ57vwuAur1Y= //整个MANIFEST.MF文件的数据摘要
 Created-By: 1.8.0_45-internal (Oracle Corporation)
 
 Name: res/layout/ac.xml
-SHA1-Digest: mYQig54fsd3pTRQTmTwMD2oO5CM=
+SHA1-Digest: mYQig54fsd3pTRQTmTwMD2oO5CM= //MANIFEST.MF 各个条目的摘要
 ```
 
 ### 2.1.3、CERT.RSA
@@ -119,15 +121,25 @@ keytool -printcert -file xxx.RSA
 
 ![image-20201217163225037](pics/image-20201217163225037.png)
 
-## 2.2、v1签名过程
+## 2.2、[v1验签过程](https://android.googlesource.com/platform/frameworks/base/+/android-5.1.1_r38/services/core/java/com/android/server/pm/PackageManagerService.java)
 
-[apksigner源码](https://android.googlesource.com/platform/build/+/7e447ed/tools/signapk/SignApk.java)
+1. **首先校验cert.sf文件的签名**
 
-## 2.3、v1验签过程
+   计算cert.sf文件的摘要，与通过签名者公钥解密CERT.RSA文件得到的摘要进行对比，如果一致则进入下一步；
 
-[验签源码](https://android.googlesource.com/platform/frameworks/base/+/android-5.1.1_r38/services/core/java/com/android/server/pm/PackageManagerService.java)
+2. **校验manifest.mf文件的完整性**
 
-## 2.4、v1签名的劣势
+   计算manifest.mf文件的摘要，与cert.sf主属性中记录的摘要进行对比，如一致则逐一校验mf文件各个条目的完整性；
+
+3. **校验apk中每个文件的完整性**
+
+   逐一计算apk中每个文件（META-INF目录除外）的摘要，与mf中的记录进行对比，如全部一致，刚校验通过；
+
+4. **校验签名的一致性**
+
+   如果是升级安装，还需校验证书签名是否与已安装app一致。
+
+## 2.3、v1签名的劣势
 
 1. 签名校验速度慢
 
@@ -207,35 +219,95 @@ V2签名块的生成可参考[ApkSignerV2](https://android.googlesource.com/plat
 2. 把最左侧一列的`数据摘要`、`数字证书`和`额外属性`组装起来，形成类似于V1签名的“MF”文件（第二列第一行）；
 3. 再用相同的私钥，不同的签名算法，计算出“MF”文件的数字签名，形成类似于V1签名的“SF”文件（第二列第二行）；
 4. 把第二列的`类似MF文件`、`类似SF文件`和`开发者公钥`一起组装成通过单个keystore签名后的v2签名块（第三列第一行）。
-   最后，把多个keystore签名后的签名块组装起来，就是完整的V2签名块了（Android中允许使用多个keystore对apk进行签名）。
+5. 把多个keystore签名后的签名块组装起来，就是完整的V2签名块了（Android中允许使用多个keystore对apk进行签名）。
 
 ![image-20201219153651713](../GITNOTE/Notes/pics/image-20201219153651713.png)
 
 
 
-## 2.4、v2 Block定位
+## 2.4、v2验签过程
 
-在介绍v2Block的定位前，需要先介绍下即**中央目录结尾记录区**，记录了中央目录开始的位置，由于签名分块是紧邻在中央目录之前，所以需要先定位到EOCD
+在 Android 7.0 及更高版本中，可以根据 APK 签名方案 v2+ 或 JAR 签名（v1 方案）验证 APK。更低版本的平台会忽略 v2 签名，仅验证 v1 签名。
+
+![image-20201221204054757](../GITNOTE/Notes/pics/image-20201221204054757.png)
+
+### 2.4.1、v2 验证过程
+
+1. 找到“APK 签名分块”并验证以下内容：
+
+   1. “APK 签名分块”的两个大小字段包含相同的值。
+   2. “ZIP 中央目录结尾”紧跟在“ZIP 中央目录”记录后面。
+   3. “ZIP 中央目录结尾”之后没有任何数据。
+
+2. 找到“APK 签名分块”中的第一个“APK 签名方案 v2 分块”。如果 v2 分块存在，则继续执行第 3 步。否则，回退至[使用 v1 方案](https://source.android.com/security/apksigning/v2#v1-verification)验证 APK。
+
+3. 对“APK 签名方案 v2 分块”中的每个`signer`
+
+   执行以下操作：
+
+   1. 从 `signatures` 中选择安全系数最高的受支持 `signature algorithm ID`。安全系数排序取决于各个实现/平台版本。
+   2. 使用 `public key` 并对照 `signed data` 验证 `signatures` 中对应的 `signature`。（现在可以安全地解析 `signed data` 了。）
+   3. 验证 `digests` 和 `signatures` 中的签名算法 ID 列表（有序列表）是否相同。（这是为了防止删除/添加签名。）
+   4. 使用签名算法所用的同一种摘要算法[计算 APK 内容的摘要](https://source.android.com/security/apksigning/v2#integrity-protected-contents)。
+   5. 验证计算出的摘要是否与 `digests` 中对应的 `digest` 一致。
+   6. 验证 `certificates` 中第一个 `certificate` 的 SubjectPublicKeyInfo 是否与 `public key` 相同。
+
+4. 如果找到了至少一个 `signer`，并且对于每个找到的 `signer`，第 3 步都取得了成功，APK 验证将会成功。
+
+**注意**：如果第 3 步或第 4 步失败了，则不得使用 v1 方案验证 APK。
+
+### 2.4.2、防回滚保护
+
+1. 经过V2签名的APK中同时带有JAR签名，攻击者可能将APK的V2签名删除，使得Android系统只校验JAR签名。为防范此类攻击，V2方案规定：带 v2 签名的 APK 如果还带 v1 签名，其 META-INF/*.SF 文件的主要部分中必须包含 X-Android-APK-Signed 属性。该属性的值是一组以英文逗号分隔的 APK 签名方案 ID（v2 方案的 ID 为 2）。**在验证 v1 签名时，对于此组中验证程序首选的 APK 签名方案（例如，v2 方案），如果 APK 没有相应的签名，APK 验证程序必须要拒绝这些 APK**。
+
+2. 攻击者可能会试图从“APK 签名方案 v2 分块”中删除安全系数较高的签名。
+
+   为了防范此类攻击，对 APK 进行签名时使用的签名算法 ID 的列表会存储在通过各个签名保护的 `signed data` 分块中。
+
+## 2.5、多渠道打包原理
+
+## 2.5.1、EOCD
+
+经过前面的介绍，我们知道要在apk中定位某个文件的位置必须要先解析出EOCD的结果，根据EOCD的结构推断出中央目录区，再根据中央目录区定位到v2签名块或者文件的情况。下面是EOCD的结构，主要包括几部分：
+
+1. 魔数 0x06054B50，标记EOCD
+2. 中央目录信息（起始位置，记录数，长度）
+3. 注释区长度n（前2个字节）以及注释内容（Comment）
 
 ![image-20201219155013207](../GITNOTE/Notes/pics/image-20201219155013207.png)
 
-1、从apk文件结尾，通过ID 0x06054B50定位到**EOCD**；
+
+
+### 2.5.2、多渠道打包原理
+
+#### 1、v1方案：
+
+根据之前的V1签名和校验机制可知，v1签名只会检验第一部分的所有压缩文件，而不理会后两部分内容。因此，我们可以向注释区中写入渠道。写入过程如下：
+
+1. 找到EOCD数据块
+2. 修改注释长度
+3. 添加渠道信息
+4. 添加渠道信息长度
+5. 添加魔数
+
+这里添加魔数的好处是方便从后向前读取数据，定位渠道信息。
+因此，读取渠道信息包括以下几步：
+
+1. 定位到魔数
+2. 向前读两个字节，确定渠道信息的长度LEN
+3. 继续向前读LEN字节，就是渠道信息了。
+
+#### 2、v2方案：
+
+v2Block定位步骤如下：
+
+1、从apk文件结尾，通过ID **0x06054B50定**位到**EOCD**；
 
 2、通过EOCD找到**中央目录结尾起始偏移**；
 
-3、再通过magic值（APK Sig Block 42）确定APK签名分块；
+3、通过magic值（APK Sig Block 42）确定APK签名分块；
 
-4、最后通过ID（0x7109871a）定位v2分块。
-
-
-
-介绍v2Block主要是用于校验包的渠道来源。
-
-## 2.5、
-
-## 2.5、v2验签过程
-
-![image-20201219152711126](../GITNOTE/Notes/pics/image-20201219152711126.png)
+4、通过ID（0x7109871a）定位v2分块。
 
 # 3、V3签名
 
@@ -243,3 +315,12 @@ V2签名块的生成可参考[ApkSignerV2](https://android.googlesource.com/plat
 
 
 
+
+
+
+
+参考：
+
+https://www.jianshu.com/p/286d2b372334
+
+https://juejin.cn/post/6844903473310334984
