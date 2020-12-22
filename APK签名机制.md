@@ -155,6 +155,8 @@ keytool -printcert -file xxx.RSA
 
 ## 2.1、ZIP文件结构
 
+我们先来了解下v1签名文件的apk结构，也就是zip文件的结构。
+
 ![image-20201217175101791](pics/image-20201217175101791.png)
 
 
@@ -331,7 +333,7 @@ Gradle Plugin为我们提供了一个自动化的方案，我们可以利用占�
 
 ## 5.3、v3 方案
 
-v3和v2的方案基本相同，但是v3签名限制了签名块大小是4096的倍数，在不写入渠道时读取下APK Singing Block，其大小刚好是4096。若写入渠道后不满足该条件，如果不是的话，就会去生成一个ByteBuffer来填充签名块，其ID为0x42726577。所以写入渠道后，可以通过修改**0x42726577**的value的大小保证签名块长度是4096的倍数即可。源码：
+v3和v2的方案基本相同，但是v3签名**限制了签名块大小是4096的倍数**（[参考](https://www.cnblogs.com/yrstudy/p/11884996.html)）在不写入渠道时读取下APK Singing Block，其大小刚好是4096。若写入渠道后不满足该条件，如果不是的话，就会去生成一个ByteBuffer来填充签名块，其ID为0x42726577。所以写入渠道后，**可以通过修改0x42726577的value的大小保证签名块长度是4096的倍数即可**。源码：
 
 [generateApkSigningBlock](https://android.googlesource.com/platform/tools/apksig/+/master/src/main/java/com/android/apksig/internal/apk/ApkSigningBlockUtils.java)
 
