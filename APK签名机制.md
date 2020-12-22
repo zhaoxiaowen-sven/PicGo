@@ -22,13 +22,13 @@ android应用在安装过程中会对apk进行签名校验，主要用于验证a
 
 ![image-20201216113655542](pics/image-20201216113655542.png)
 
-### 1.2.1、APK签名过程
+### 1.2.1、APK签名
 
 1. 计算摘要：使用数字摘要算法计算出apk的摘要；
 2. 签名：通过私钥对摘要进行加密，加密后的信息就是签名；
 3. 写入签名：将签名信息、证书以及公钥写入到文件中。
 
-### 1.2.2、APK验签过程
+### 1.2.2、APK验签
 
 1. 解密签名：通过公钥解密签名信息获得摘要；
 2. 计算摘要：使用摘要算法从接收的数据中计算摘要；
@@ -42,7 +42,7 @@ V1签名又称为JAR签名，是对jar包进行签名的一种机制，由于jar
 
 ## 2.1 v1签名过程
 
-![image-20201221200634926](../GITNOTE/Notes/pics/image-20201221200634926.png)
+![image-20201221200634926](pics/image-20201221200634926.png)
 
 MANIFEST.MF、CERT.SF、CERT.RSA是签名过程中生成的文件（[apksigner源码](https://android.googlesource.com/platform/build/+/7e447ed/tools/signapk/SignApk.java)），作用如下：
 
@@ -209,7 +209,7 @@ APK签名分块包含了4部分：分块长度、ID-VALUE序列、分块长度�
 
 v2分块主要由签名数据，数字签名以及公钥组成，具体结构如下。
 
-![image-20201219104001970](../GITNOTE/Notes/pics/image-20201219104001970.png)
+![image-20201219104001970](pics/image-20201219104001970.png)
 
 ### 2.3.3、签名过程
 
@@ -221,7 +221,7 @@ V2签名块的生成可参考[ApkSignerV2](https://android.googlesource.com/plat
 4. 把第二列的`类似MF文件`、`类似SF文件`和`开发者公钥`一起组装成通过单个keystore签名后的v2签名块（第三列第一行）。
 5. 把多个keystore签名后的签名块组装起来，就是完整的V2签名块了（Android中允许使用多个keystore对apk进行签名）。
 
-![image-20201219153651713](../GITNOTE/Notes/pics/image-20201219153651713.png)
+![image-20201219153651713](pics/image-20201219153651713.png)
 
 
 
@@ -229,7 +229,7 @@ V2签名块的生成可参考[ApkSignerV2](https://android.googlesource.com/plat
 
 在 Android 7.0 及更高版本中，可以根据 APK 签名方案 v2+ 或 JAR 签名（v1 方案）验证 APK。更低版本的平台会忽略 v2 签名，仅验证 v1 签名。
 
-![image-20201221204054757](../GITNOTE/Notes/pics/image-20201221204054757.png)
+![image-20201221204054757](pics/image-20201221204054757.png)
 
 ### 2.4.1、v2 验证过程
 
@@ -264,63 +264,85 @@ V2签名块的生成可参考[ApkSignerV2](https://android.googlesource.com/plat
 
    为了防范此类攻击，对 APK 进行签名时使用的签名算法 ID 的列表会存储在通过各个签名保护的 `signed data` 分块中。
 
-## 2.5、多渠道打包原理
+# 3、[v3签名](https://source.android.com/security/apksigning/v3.html)
 
-## 2.5.1、EOCD
+v3和v2一样签名块存储在中央目录区之前，v3 签名会存储的ID为**0xf05368c0**，新增了 ID为**0x3ba06f8c** 的proof-of-rotation 结构中用来支持应用替换签名证书。在 Android 9 及更高版本中，可以根据 APK 签名方案 v3、v2 或 v1 验证 APK。较旧的平台会忽略 v3 签名而尝试验证 v2 签名，然后尝试验证 v1 签名。
 
-经过前面的介绍，我们知道要在apk中定位某个文件的位置必须要先解析出EOCD的结果，根据EOCD的结构推断出中央目录区，再根据中央目录区定位到v2签名块或者文件的情况。下面是EOCD的结构，主要包括几部分：
+![image-20201222203051481](pics/image-20201222203051481.png)
+
+
+
+# 4、v4签名
+
+Android 11 通过 APK 签名方案 v4 支持与流式传输兼容的签名方案（来支持增量安装APK）。v4 签名基于根据 APK 的所有字节计算得出的 Merkle 哈希树。
+
+[https://](https://source.android.google.cn/security/apksigning/v4)[source.android.google.cn/security/apksigning/v4](https://source.android.google.cn/security/apksigning/v4) 
+
+# 5、多渠道打包原理
+
+同一个app，需要上线各种平台，比如：小米，华为，百度等，我们多数称之为渠道，如果发的渠道多，可能有上百个渠道。
+
+针对每个渠道，我们希望可以获取各个渠道的一些独立的统计信息，比如：下载量等。
+
+**那么，如何区分各个渠道呢？**
+
+Gradle Plugin为我们提供了一个自动化的方案，我们可以利用占位符，然后在build.gradle中去配置多个渠道信息，这样就可以将枯燥重复的任务自动化了。
+
+这样的方式最大的问题，就是效率问题，每个渠道包，都要执行一遍构建流程，打包效率太低，目前市面比较出名的方案有美团[Walle](https://tech.meituan.com/2017/01/13/android-apk-v2-signature-scheme.html)，腾讯的[VasDolly](https://github.com/Tencent/VasDolly)所谓万变不离其宗，下面就介绍下市面上多渠道打包方案的基本原理。
+
+## 5.1、v1方案
+
+### 5.1.1、EOCD
+
+我们知道要在apk中定位某个文件的位置必须要先解析出EOCD的结果，根据EOCD的结构推断出中央目录区，再根据中央目录区定位到v2签名块或者文件的情况。下面是EOCD的结构，主要包括几部分：
 
 1. 魔数 0x06054B50，标记EOCD
 2. 中央目录信息（起始位置，记录数，长度）
 3. 注释区长度n（前2个字节）以及注释内容（Comment）
 
-![image-20201219155013207](../GITNOTE/Notes/pics/image-20201219155013207.png)
+![image-20201219155013207](pics/image-20201219155013207.png)
 
-
-
-### 2.5.2、多渠道打包原理
-
-#### 1、v1方案：
+### 5.1.2、v1方案
 
 根据之前的V1签名和校验机制可知，v1签名只会检验第一部分的所有压缩文件，而不理会后两部分内容。因此，我们可以向注释区中写入渠道。写入过程如下：
 
-1. 找到EOCD数据块
-2. 修改注释长度
-3. 添加渠道信息
-4. 添加渠道信息长度
-5. 添加魔数
+![image-20201222201238671](pics/image-20201222201238671.png)
 
-这里添加魔数的好处是方便从后向前读取数据，定位渠道信息。
-因此，读取渠道信息包括以下几步：
+这里添加魔数的好处是方便从后向前读取数据，定位渠道信息。因此，读取渠道信息包括以下几步：
 
-1. 定位到魔数
-2. 向前读两个字节，确定渠道信息的长度LEN
+1. 定位到魔数；
+2. 向前读两个字节，确定渠道信息的长度LEN；
 3. 继续向前读LEN字节，就是渠道信息了。
 
-#### 2、v2方案：
+## 5.2、v2方案
 
-v2Block定位步骤如下：
+对于v2签名，Android系统只会关注ID为**0x7109871a**的v2签名块，并且忽略其他的ID-Value，同时v2签名只会保护APK本身，不包含签名块。所以可以将渠道写入到ID-Value键值对区。写入过程如下：
 
-1、从apk文件结尾，通过ID **0x06054B50定**位到**EOCD**；
+1. 从apk文件结尾，通过ID **0x06054B50定**位到**EOCD**；
 
-2、通过EOCD找到**中央目录结尾起始偏移**；
+2. 通过EOCD找到**中央目录结尾起始偏移**；
 
-3、通过magic值（APK Sig Block 42）确定APK签名分块；
+3. 获取已有的ID-Value Pair
+4. **添加包含渠道信息的ID-Value**
+5. 基于所有的ID-Value生成新的签名
+6. 修改EOCD的中央目录的偏移量(修改EOCD的中央目录偏移量，不会导致数据摘要校验失败）
 
-4、通过ID（0x7109871a）定位v2分块。
+读取过程和写入过程基本相同，忽略。
 
-# 3、V3签名
+## 5.3、v3 方案
 
-# 4、v4签名
+v3和v2的方案基本相同，但是v3签名限制了签名块大小是4096的倍数，在不写入渠道时读取下APK Singing Block，其大小刚好是4096。若写入渠道后不满足该条件，如果不是的话，就会去生成一个ByteBuffer来填充签名块，其ID为0x42726577。所以写入渠道后，可以通过修改**0x42726577**的value的大小保证签名块长度是4096的倍数即可。源码：
 
+[generateApkSigningBlock](https://android.googlesource.com/platform/tools/apksig/+/master/src/main/java/com/android/apksig/internal/apk/ApkSigningBlockUtils.java)
 
+![image-20201222211918992](pics/image-20201222211918992.png)
 
-
-
-
-
-参考：
+# 参考
 
 https://www.jianshu.com/p/286d2b372334
 
 https://juejin.cn/post/6844903473310334984
+
+https://zhuanlan.zhihu.com/p/108036144
+
+https://mp.weixin.qq.com/s/709mXKfEzSuLrd0WCqrmbghttps://github.com/Meituan-Dianping/walle)
