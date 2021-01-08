@@ -241,7 +241,7 @@ RequestFactory build() {
   if (isFormEncoded && !gotField) {
     throw methodError(method, "Form-encoded method must contain at least one @Field.");
   }
-  //规则4：方法注解中包含FormUrlEncoded时，参数中必须包含Part参数
+  // 规则4：方法注解中包含FormUrlEncoded时，参数中必须包含Part参数
   if (isMultipart && !gotPart) {
     throw methodError(method, "Multipart method must contain at least one @Part.");
   }
@@ -431,49 +431,318 @@ else if (annotation instanceof QueryName) {
 
 ### 3.3.2、HttpServiceMethod.parseAnnotations
 
-精简完的核心代码如下
+精简完的核心代码如下：
 
 ```java
 static <ResponseT, ReturnT> HttpServiceMethod<ResponseT, ReturnT> parseAnnotations(
     Retrofit retrofit, Method method, RequestFactory requestFactory) {
-   //...省略
-   adapterType = method.getGenericReturnType();
-  //1.根据网络请求接口方法的返回值和注解类型得到响应类型
+  // 1.确定接口的返回类型，这个参数很重要
+  adapterType = method.getGenericReturnType();
+  // 2.根据网络请求接口方法的返回类型和注解类型得到响应类型
   CallAdapter<ResponseT, ReturnT> callAdapter =
       createCallAdapter(retrofit, method, adapterType, annotations);
   Type responseType = callAdapter.responseType();
-  
-  //...
 
-  //2.根据网络请求接口方法的响应类型从Retrofit对象中获取对应的数据转换器 
+  // 3.根据网络请求接口方法的响应类型从Retrofit对象中获取对应的数据转换器 
   Converter<ResponseBody, ResponseT> responseConverter =
-      createResponseConverter(retrofit, method, responseType);
-
+      createResponseConverter(retrofit, method, responseType); 
+  // 4.执行请求OkHttpClient
   okhttp3.Call.Factory callFactory = retrofit.callFactory;
-	// 3、
-    return new CallAdapted<>(requestFactory, callFactory, responseConverter, callAdapter);
+  // 5.
+  return new CallAdapted<>(requestFactory, callFactory, responseConverter, callAdapter);
   
 }
 ```
 
 #### 1、createCallAdapter
 
+​        创建请求适配器， 
 
-
-#### 2、createResponseConverter
-
-# 4、请求执行过程
-
-## 4.1、HttpServiceMethod.invoke
-
-```java
-final @Nullable ReturnT invoke(Object[] args) {
-  Call<ResponseT> call = new OkHttpCall<>(requestFactory, args, callFactory, responseConverter);
-  return adapt(call, args);
+```
+private static <ResponseT, ReturnT> CallAdapter<ResponseT, ReturnT> createCallAdapter(
+    Retrofit retrofit, Method method, Type returnType, Annotation[] annotations) {
+  try {
+    //noinspection unchecked
+    return (CallAdapter<ResponseT, ReturnT>) retrofit.callAdapter(returnType, annotations);
+  } catch (RuntimeException e) { // Wide exception range because factories are user code.
+    throw methodError(method, e, "Unable to create call adapter for %s", returnType);
+  }
 }
 ```
 
+ 默认情况下返回的是DefaultCallAdapterFactory这个对象
 
+```
+final class DefaultCallAdapterFactory extends CallAdapter.Factory {
+  private final @Nullable Executor callbackExecutor;
+
+  DefaultCallAdapterFactory(@Nullable Executor callbackExecutor) {
+    this.callbackExecutor = callbackExecutor;
+  }
+}
+```
+
+#### 2、createResponseConverter
+
+​       创建数据解析器，其实就是将传入的BuiltInConverters
+
+​      数据解析器有2个作用：1是将Response转换成我们需要的返回数据类型；2是将输入的请求参数转换为ResquestBody类型。
+
+```
+private static <ResponseT> Converter<ResponseBody, ResponseT> createResponseConverter(
+    Retrofit retrofit, Method method, Type responseType) {
+  Annotation[] annotations = method.getAnnotations();
+  try {
+    return retrofit.responseBodyConverter(responseType, annotations);
+  } catch (RuntimeException e) { // Wide exception range because factories are user code.
+    throw methodError(method, e, "Unable to create converter for %s", responseType);
+  }
+}
+```
+
+默认实现的BuiltInConverters。当方法返回值类型type是ResponseBody时检查一下方法是否使用了@Streaming注解标识，如果没有标识则将数据全部读取到内存中，返回一个ResponseBody。
+
+```java
+final class BuiltInConverters extends Converter.Factory {
+  /** Not volatile because we don't mind multiple threads discovering this. */
+  private boolean checkForKotlinUnit = true;
+
+  @Override
+  public @Nullable Converter<ResponseBody, ?> responseBodyConverter(
+      Type type, Annotation[] annotations, Retrofit retrofit) {
+    if (type == ResponseBody.class) {
+      return Utils.isAnnotationPresent(annotations, Streaming.class)
+          ? StreamingResponseBodyConverter.INSTANCE
+          : BufferingResponseBodyConverter.INSTANCE;
+    }
+    if (type == Void.class) {
+      return VoidResponseBodyConverter.INSTANCE;
+    }
+    if (checkForKotlinUnit) {
+      try {
+        if (type == Unit.class) {
+          return UnitResponseBodyConverter.INSTANCE;
+        }
+      } catch (NoClassDefFoundError ignored) {
+        checkForKotlinUnit = false;
+      }
+    }
+    return null;
+  }
+
+  @Override
+  public @Nullable Converter<?, RequestBody> requestBodyConverter(
+      Type type,
+      Annotation[] parameterAnnotations,
+      Annotation[] methodAnnotations,
+      Retrofit retrofit) {
+    if (RequestBody.class.isAssignableFrom(Utils.getRawType(type))) {
+      return RequestBodyConverter.INSTANCE;
+    }
+    return null;
+  }
+ // ...
+ }
+```
+
+经过以上几步，我们最终获取到一个CallAdapted对象。
+
+```java
+new CallAdapted<>(requestFactory, callFactory, responseConverter, callAdapter);
+```
+
+## 3.4、HttpServiceMethod.invoke
+
+invoke方法最终会调用到callAdapter.adapt方法。
+
+```java
+  @Override
+  final @Nullable ReturnT invoke(Object[] args) {
+    Call<ResponseT> call = new OkHttpCall<>(requestFactory, args, callFactory, responseConverter);
+    return adapt(call, args);
+  }
+
+  static final class CallAdapted<ResponseT, ReturnT> extends HttpServiceMethod<ResponseT, ReturnT> {
+    private final CallAdapter<ResponseT, ReturnT> callAdapter;
+
+    CallAdapted(
+        RequestFactory requestFactory,
+        okhttp3.Call.Factory callFactory,
+        Converter<ResponseBody, ResponseT> responseConverter,
+        CallAdapter<ResponseT, ReturnT> callAdapter) {
+      super(requestFactory, callFactory, responseConverter);
+      this.callAdapter = callAdapter;
+    }
+
+    @Override
+    protected ReturnT adapt(Call<ResponseT> call, Object[] args) {
+      return callAdapter.adapt(call);
+    }
+  }
+```
+
+联系到3.2节的DefaultCallAdapterFactory
+
+```java
+final class DefaultCallAdapterFactory extends CallAdapter.Factory {
+  private final @Nullable Executor callbackExecutor;
+
+  DefaultCallAdapterFactory(@Nullable Executor callbackExecutor) {
+    this.callbackExecutor = callbackExecutor;
+  }
+
+  @Override
+  public @Nullable CallAdapter<?, ?> get(
+      Type returnType, Annotation[] annotations, Retrofit retrofit) {
+    if (getRawType(returnType) != Call.class) {
+      return null;
+    }
+    if (!(returnType instanceof ParameterizedType)) {
+      throw new IllegalArgumentException(
+          "Call return type must be parameterized as Call<Foo> or Call<? extends Foo>");
+    }
+    final Type responseType = Utils.getParameterUpperBound(0, (ParameterizedType) returnType);
+
+    final Executor executor =
+        Utils.isAnnotationPresent(annotations, SkipCallbackExecutor.class)
+            ? null
+            : callbackExecutor;
+
+    return new CallAdapter<Object, Call<?>>() {
+      @Override
+      public Type responseType() {
+        return responseType;
+      }
+
+      @Override
+      public Call<Object> adapt(Call<Object> call) {
+        return executor == null ? call : new ExecutorCallbackCall<>(executor, call);
+      }
+    };
+```
+
+可以看到adapt方法中当executor == null，就返回传入的call对象，即之前新建的OkHttpCall实例对象。
+
+# 4、请求执行过程
+
+请求的执行过程就是和OkHttp请求过程一致，以同步请求为例。
+
+```
+public Response<T> execute() throws IOException {
+  okhttp3.Call call;
+
+  synchronized (this) {
+    if (executed) throw new IllegalStateException("Already executed.");
+    executed = true;
+
+    call = getRawCall();
+  }
+
+  if (canceled) {
+    call.cancel();
+  }
+
+  return parseResponse(call.execute());
+}
+```
+
+## 4.1 createRawCall
+
+创建RealCall 并且生成request参数
+
+```
+private okhttp3.Call createRawCall() throws IOException {
+  okhttp3.Call call = callFactory.newCall(requestFactory.create(args));
+  if (call == null) {
+    throw new NullPointerException("Call.Factory returned null.");
+  }
+  return call;
+}
+
+
+ okhttp3.Request create(Object[] args) throws IOException {
+    @SuppressWarnings("unchecked") // It is an error to invoke a method with the wrong arg types.
+    ParameterHandler<Object>[] handlers = (ParameterHandler<Object>[]) parameterHandlers;
+
+    int argumentCount = args.length;
+    if (argumentCount != handlers.length) {
+      throw new IllegalArgumentException(
+          "Argument count ("
+              + argumentCount
+              + ") doesn't match expected count ("
+              + handlers.length
+              + ")");
+    }
+
+    RequestBuilder requestBuilder =
+        new RequestBuilder(
+            httpMethod,
+            baseUrl,
+            relativeUrl,
+            headers,
+            contentType,
+            hasBody,
+            isFormEncoded,
+            isMultipart);
+
+    if (isKotlinSuspendFunction) {
+      // The Continuation is the last parameter and the handlers array contains null at that index.
+      argumentCount--;
+    }
+
+    List<Object> argumentList = new ArrayList<>(argumentCount);
+    for (int p = 0; p < argumentCount; p++) {
+      argumentList.add(args[p]);
+      handlers[p].apply(requestBuilder, args[p]);
+    }
+
+    return requestBuilder.get().tag(Invocation.class, new Invocation(method, argumentList)).build();
+  }
+```
+
+## 4.2 parseResponse
+
+处理请求结果，通过responseConverter解析对象。
+
+```
+Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
+  ResponseBody rawBody = rawResponse.body();
+
+  // Remove the body's source (the only stateful object) so we can pass the response along.
+  rawResponse =
+      rawResponse
+          .newBuilder()
+          .body(new NoContentResponseBody(rawBody.contentType(), rawBody.contentLength()))
+          .build();
+
+  int code = rawResponse.code();
+  if (code < 200 || code >= 300) {
+    try {
+      // Buffer the entire body to avoid future I/O.
+      ResponseBody bufferedBody = Utils.buffer(rawBody);
+      return Response.error(bufferedBody, rawResponse);
+    } finally {
+      rawBody.close();
+    }
+  }
+
+  if (code == 204 || code == 205) {
+    rawBody.close();
+    return Response.success(null, rawResponse);
+  }
+
+  ExceptionCatchingResponseBody catchingBody = new ExceptionCatchingResponseBody(rawBody);
+  try {
+    T body = responseConverter.convert(catchingBody);
+    return Response.success(body, rawResponse);
+  } catch (RuntimeException e) {
+    // If the underlying source threw an exception, propagate that rather than indicating it was
+    // a runtime exception.
+    catchingBody.throwIfCaught();
+    throw e;
+  }
+}
+```
 
 # 5、Converter.Factory
 
