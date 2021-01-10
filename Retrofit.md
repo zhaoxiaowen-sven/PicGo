@@ -70,7 +70,7 @@
 
 ## 3.1、Retrofit.create
 
-使用动态代理方式创建一个请求接口代理对象，InvocationHandler 中定义了代理的规则，**在调用到方法时**，解析方法的注解中的参数，生成对应的ServiceMethod对象，再执行方法的参数。
+使用动态代理方式创建一个请求接口代理对象，InvocationHandler 中定义了代理的规则，在调用到方法时，解析方法的注解中的参数，生成对应的ServiceMethod对象，再执行方法的参数。
 
 ```java
 public <T> T create(final Class<T> service) {
@@ -486,7 +486,9 @@ final class DefaultCallAdapterFactory extends CallAdapter.Factory {
 
 ​       创建数据解析器，其实就是将传入的BuiltInConverters
 
-​      数据解析器有2个作用：1是将Response转换成我们需要的返回数据类型；2是将输入的请求参数转换为ResquestBody类型。
+​      数据解析器有2个作用：1是将Response转换成我们需要的返回数据类型；
+
+​                                            2是将输入的请求参数转换为ResquestBody类型。
 
 ```
 private static <ResponseT> Converter<ResponseBody, ResponseT> createResponseConverter(
@@ -650,7 +652,7 @@ public Response<T> execute() throws IOException {
 
 创建RealCall 并且生成request参数
 
-```
+```java
 private okhttp3.Call createRawCall() throws IOException {
   okhttp3.Call call = callFactory.newCall(requestFactory.create(args));
   if (call == null) {
@@ -696,15 +698,29 @@ private okhttp3.Call createRawCall() throws IOException {
       handlers[p].apply(requestBuilder, args[p]);
     }
 
-    return requestBuilder.get().tag(Invocation.class, new Invocation(method, argumentList)).build();
+    return .get().tag(Invocation.class, new Invocation(method, argumentList)).build();
   }
+```
+
+### 1、ParameterHandler
+
+使用ParameterHandler.apply 解析所有的方法参数
+
+
+
+2、requestBuilder.xxx
+
+将参数放到url中
+
+```
+ParameterHandler
 ```
 
 ## 4.2 parseResponse
 
 处理请求结果，通过responseConverter解析对象。
 
-```
+```java
 Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
   ResponseBody rawBody = rawResponse.body();
 
@@ -715,6 +731,7 @@ Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
           .body(new NoContentResponseBody(rawBody.contentType(), rawBody.contentLength()))
           .build();
 
+  // 1、请求失败的处理
   int code = rawResponse.code();
   if (code < 200 || code >= 300) {
     try {
@@ -726,6 +743,7 @@ Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
     }
   }
 
+  // 2、204 205 代表请求成功，但是没有资源可返回
   if (code == 204 || code == 205) {
     rawBody.close();
     return Response.success(null, rawResponse);
@@ -733,6 +751,7 @@ Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
 
   ExceptionCatchingResponseBody catchingBody = new ExceptionCatchingResponseBody(rawBody);
   try {
+   // 3、请求成功，解析请求返回的数据
     T body = responseConverter.convert(catchingBody);
     return Response.success(body, rawResponse);
   } catch (RuntimeException e) {
@@ -744,8 +763,22 @@ Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
 }
 ```
 
-# 5、Converter.Factory
 
 
+
+
+整体的一个框架图
+
+
+
+onFailure
+
+
+
+onResponse
+
+
+
+Rxjava 
 
 # 6、CallAdapter.Factory
