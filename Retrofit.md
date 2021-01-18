@@ -68,9 +68,9 @@
 
 # 3、请求创建流程
 
-## 3.1、Retrofit.create
+## 3.1、创建接口代理对象
 
-使用动态代理方式创建一个请求接口代理对象，InvocationHandler 中定义了代理的规则，在调用到方法时，解析方法的注解中的参数，生成对应的ServiceMethod对象，再执行方法的参数。
+Retrofit.create，使用动态代理方式创建请求接口的代理对象，InvocationHandler 中定义了代理的规则，在调用到方法时，解析方法的注解中的参数，生成对应的ServiceMethod对象，再执行方法的参数。
 
 ```java
 public <T> T create(final Class<T> service) {
@@ -101,9 +101,15 @@ public <T> T create(final Class<T> service) {
 }
 ```
 
-## 3.2、loadServiceMethod
 
-根据方法的相关注解，生成对应的ServiceMethod对象。
+
+3.2 动态代理调用过程
+
+
+
+## 3.2、生成ServiceMethod对象
+
+loadServiceMethod，根据方法的相关注解，生成对应的ServiceMethod对象。
 
 ```java
 ServiceMethod<?> loadServiceMethod(Method method) {
@@ -125,11 +131,11 @@ ServiceMethod<?> loadServiceMethod(Method method) {
 
  loadService有2个入口，一个是在InvocationHandler中，另一个是在上一步的validateServiceInterface中。
 
- 若validateEagerly参数为true，那么在生成动态代理对象时，解析接口中所有的方法，生成ServiceMethod对象。
+ 若validateEagerly参数为true，那么在生成接口的动态代理对象时，解析接口中所有的方法，生成ServiceMethod对象，否则只会在调用到具体方法时才生成相关的对象。
 
 ```java
 private void validateServiceInterface(Class<?> service) {
-  ...
+  // ...
   // 提前初始化
   if (validateEagerly) {
     Platform platform = Platform.get();
@@ -144,6 +150,8 @@ private void validateServiceInterface(Class<?> service) {
 ```
 
 ## 3.3、ServiceMethod.parseAnnotations
+
+ServiceMethod.parseAnnotations，parseAnnotations 中主要的方法有2个，分别解析方法注解（包含方法参数注解）以及生成对应的解析和处理。
 
 ```java
 static <T> ServiceMethod<T> parseAnnotations(Retrofit retrofit, Method method) {
@@ -165,11 +173,9 @@ static <T> ServiceMethod<T> parseAnnotations(Retrofit retrofit, Method method) {
   }
 ```
 
-parseAnnotations 中主要的方法有2个，先来看第一个。
+### 3.3.1、生成RequestFactory对象
 
-### 3.3.1、RequestFactory.parseAnnotations
-
-通过解析方法注解和方法中的参数注解生成一个RequestFactory对象，包含请求设定的参数。我们先看一下RequestFactory中有哪些对象。
+RequestFactory.parseAnnotations，通过解析方法注解和方法中的参数注解生成一个RequestFactory对象，包含请求设定的参数。我们先看一下RequestFactory中有哪些对象。
 
 ```java
 RequestFactory(Builder builder) {
@@ -250,9 +256,9 @@ RequestFactory build() {
 }
 ```
 
-#### 1、parseMethodAnnotation
+#### 1、解析**方法注解**
 
-​       解析方法上的注解，主要是请求方式，HEADER等，这里可以确定哪些注解是可以作用到方法上的。
+​      parseMethodAnnotation，解析**方法注解**，主要是请求方式，HEADER等，这里可以确定哪些注解是可以作用到方法上的。
 
 ```java
 private void parseMethodAnnotation(Annotation annotation) {
@@ -333,9 +339,9 @@ private void parseHttpMethodAndPath(String httpMethod, String value, boolean has
     }
 ```
 
-#### 2、parseParameterAnnotation
+#### 2、解析方法参数注解
 
-​         根据不同的注解类型，生成对应的ParameterHandler，通过ParameterHandler将相关参数赋值到请求里。
+​      parseParameterAnnotation, 解析方法参数注解，生成对应的ParameterHandler，在执行请求时，通过ParameterHandler将相关参数赋值到请求里。
 
 ```java
 private ParameterHandler<?> parseParameterAnnotation(
@@ -456,7 +462,7 @@ static <ResponseT, ReturnT> HttpServiceMethod<ResponseT, ReturnT> parseAnnotatio
 
 #### 1、createCallAdapter
 
-​        创建请求适配器， 
+创建请求适配器， 
 
 ```
 private static <ResponseT, ReturnT> CallAdapter<ResponseT, ReturnT> createCallAdapter(
@@ -484,11 +490,11 @@ final class DefaultCallAdapterFactory extends CallAdapter.Factory {
 
 #### 2、createResponseConverter
 
-​       创建数据解析器，其实就是将传入的BuiltInConverters
+创建数据解析器，其实就是将传入的BuiltInConverters
 
-​      数据解析器有2个作用：1是将Response转换成我们需要的返回数据类型；
+数据解析器有2个作用：1、是将Response转换成我们需要的返回数据类型；
 
-​                                            2是将输入的请求参数转换为ResquestBody类型。
+​                                         2、是将输入的请求参数转换为ResquestBody类型。
 
 ```
 private static <ResponseT> Converter<ResponseBody, ResponseT> createResponseConverter(
@@ -691,20 +697,21 @@ private okhttp3.Call createRawCall() throws IOException {
       // The Continuation is the last parameter and the handlers array contains null at that index.
       argumentCount--;
     }
-
+     
+    // 2、解析方法中的参数
     List<Object> argumentList = new ArrayList<>(argumentCount);
     for (int p = 0; p < argumentCount; p++) {
       argumentList.add(args[p]);
       handlers[p].apply(requestBuilder, args[p]);
     }
 
-    return .get().tag(Invocation.class, new Invocation(method, argumentList)).build();
+    return requestBuilder.get().tag(Invocation.class, new Invocation(method, argumentList)).build();
   }
 ```
 
 ### 1、ParameterHandler
 
-使用ParameterHandler.apply 解析所有的方法参数
+使用ParameterHandler.apply 解析方法参数列表
 
 
 
