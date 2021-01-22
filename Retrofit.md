@@ -1,10 +1,53 @@
-# Retrofit
+# Retrofit源码解析
 
-# 1、基本用法
+# 一、基本用法
 
-  
+## 1.1、gradle依赖
 
-# 2、注解介绍
+```
+implementation 'com.squareup.retrofit2:retrofit:2.9.0'
+implementation 'com.squareup.retrofit2:converter-gson:2.9.0'
+```
+
+## 1.2、定义接口
+
+```
+interface GetApi {
+    /**
+     * 获取用户信息
+     * @return
+     * @Query 注解
+     */
+    @GET("api/getUserInfo")
+    Call<UserInfo> getUserInfo(@Query("id") List<String> userId);
+ }
+```
+
+## 1.3、创建retrofit发送请求
+
+```
+Retrofit retrofit = new Retrofit.Builder().baseUrl(URL1).addConverterFactory(GsonConverterFactory.create()).build();
+
+GetApi getApi = retrofit.create(GetApi.class);
+
+List<String> params = new ArrayList<>();
+params.add("1234");
+getApi.getUserInfo(params).enqueue(new Callback<UserInfo>() {
+    @Override
+    public void onResponse(Call<UserInfo> call, Response<UserInfo> response) {
+          String tag = response.raw().request().tag().toString();
+          Log.d(TAG, "tag = " + tag);
+        UserInfo userInfo = response.body();
+        Log.d(TAG, "userinfo = " + userInfo + " thread " +  Thread.currentThread().getName());
+    }
+    @Override
+    public void onFailure(Call<UserInfo> call, Throwable t) {
+        Log.i(TAG, "onFailure: " + t);
+    }
+  });
+```
+
+# 二、注解介绍
 
 ## 2.1、请求方法
 
@@ -66,7 +109,7 @@
 
 [Retrofit学习之文件和参数上传](https://www.jianshu.com/p/74b7da380855)
 
-# 3、Retrofit构建过程
+# 三、Retrofit构建过程
 
 ```java
 Retrofit retrofit = new Retrofit.Builder().baseUrl(URL1).addConverterFactory(GsonConverterFactory.create()).build()
@@ -223,14 +266,14 @@ final class DefaultCallAdapterFactory extends CallAdapter.Factory {
   // ensures correct behavior when using converters that consume all types.
   converterFactories.add(new BuiltInConverters());
   converterFactories.addAll(this.converterFactories);
-  converterFactories.addAll(platform.defaultConverterFactories());BuiltInConverters
+  converterFactories.addAll(platform.defaultConverterFactories());
 ```
 
-# 4、请求创建流程
+# 四、接口创建过程
 
-## 3.1、创建接口代理对象
+## 4.1、创建接口代理对象
 
-Retrofit.create，使用动态代理方式创建请求接口的代理对象，InvocationHandler 中定义了代理的规则，在调用到方法时，解析方法的注解中的参数，生成对应的ServiceMethod对象，再执行方法的参数。
+Retrofit.create，使用动态代理方式创建请求接口的代理对象，InvocationHandler 中定义了代理的规则，在调用到接口时，解析接口方法的注解参数，生成对应的ServiceMethod对象，并在调用到方法时，执行方法的参数。
 
 ```java
 public <T> T create(final Class<T> service) {
@@ -261,7 +304,7 @@ public <T> T create(final Class<T> service) {
 }
 ```
 
-## 3.2、生成ServiceMethod对象
+## 4.2、ServiceMethod创建
 
 loadServiceMethod，根据方法的相关注解，生成对应的ServiceMethod对象。
 
@@ -303,7 +346,7 @@ private void validateServiceInterface(Class<?> service) {
 }
 ```
 
-## 3.3、ServiceMethod.parseAnnotations
+## 4.3、ServiceMethod.parseAnnotations
 
 parseAnnotations 中主要的方法有2个，分别解析方法注解（包含方法参数注解）以及生成对应的请求适配器和网络数据转换器。
 
@@ -327,14 +370,14 @@ static <T> ServiceMethod<T> parseAnnotations(Retrofit retrofit, Method method) {
   }
 ```
 
-### 3.3.1、生成RequestFactory对象
+### 4.3.1、生成RequestFactory对象
 
-RequestFactory.parseAnnotations，通过解析方法注解和方法中的参数注解生成一个RequestFactory对象，包含请求设定的参数。我们先看一下RequestFactory中有哪些对象。
+RequestFactory.parseAnnotations，通过解析方法注解和方法中的参数注解生成一个RequestFactory对象，**包含请求设定的参数**。我们先看一下RequestFactory中有哪些对象。
 
 ```java
 RequestFactory(Builder builder) {
-  method = builder.method;
-  baseUrl = builder.retrofit.baseUrl;
+  method = builder.method;//请求方式
+  baseUrl = builder.retrofit.baseUrl;//请求地址
   httpMethod = builder.httpMethod;
   relativeUrl = builder.relativeUrl;
   headers = builder.headers;
@@ -347,7 +390,7 @@ RequestFactory(Builder builder) {
 }
 ```
 
-parseAnnotations负责创建RequestFactory对象，创建时使用了Builder模式。
+可以看到RequestFactory中的对象和接口的方法注解对象基本是一一对应的，RequestFactory创建时使用了Builder模式。
 
 ```java
 static RequestFactory parseAnnotations(Retrofit retrofit, Method method) {
@@ -589,9 +632,9 @@ else if (annotation instanceof QueryName) {
 // 省略...
 ```
 
-### 3.3.2、请求适配器和数据生成器
+### 4.3.2、请求适配器 & 数据转化器 & 请求执行器
 
-HttpServiceMethod.parseAnnotations
+HttpServiceMethod.parseAnnotations 负责创建请求适配器 、数据转化器 、 请求执行器。
 
 ```java
 static <ResponseT, ReturnT> HttpServiceMethod<ResponseT, ReturnT> parseAnnotations(
@@ -610,13 +653,12 @@ static <ResponseT, ReturnT> HttpServiceMethod<ResponseT, ReturnT> parseAnnotatio
   okhttp3.Call.Factory callFactory = retrofit.callFactory;
  
   return new CallAdapted<>(requestFactory, callFactory, responseConverter, callAdapter);
-  
 }
 ```
 
-#### 1、createCallAdapter
+#### 1、创建请求适配器
 
-创建请求适配器，  默认情况下返回的是初始化时的DefaultCallAdapterFactory这个对象
+createCallAdapter，  默认情况下返回的是初始化时的**DefaultCallAdapterFactory**对象
 
 ```
 private static <ResponseT, ReturnT> CallAdapter<ResponseT, ReturnT> createCallAdapter(
@@ -630,7 +672,7 @@ private static <ResponseT, ReturnT> CallAdapter<ResponseT, ReturnT> createCallAd
 }
 ```
 
-#### 2、createResponseConverter
+#### 2、创建数据转换器
 
 创建数据解析器，默认情况下使用的是传入的BuiltInConverters
 
@@ -646,13 +688,14 @@ private static <ResponseT> Converter<ResponseBody, ResponseT> createResponseConv
 }
 ```
 
-默认实现的BuiltInConverters。当方法返回值类型type是ResponseBody时检查一下方法是否使用了@Streaming注解标识，如果没有标识则将数据全部读取到内存中，返回一个ResponseBody。
+当方法返回值类型type是ResponseBody时检查一下方法是否使用了@Streaming注解标识，否则会将数据全部读取到内存中，返回ResponseBody。
 
 ```java
 final class BuiltInConverters extends Converter.Factory {
   /** Not volatile because we don't mind multiple threads discovering this. */
   private boolean checkForKotlinUnit = true;
 
+  // 1、ResponseBody转换成数据对象
   @Override
   public @Nullable Converter<ResponseBody, ?> responseBodyConverter(
       Type type, Annotation[] annotations, Retrofit retrofit) {
@@ -676,6 +719,7 @@ final class BuiltInConverters extends Converter.Factory {
     return null;
   }
 
+  // 2、对象转换成RequestBody对象
   @Override
   public @Nullable Converter<?, RequestBody> requestBodyConverter(
       Type type,
@@ -691,19 +735,20 @@ final class BuiltInConverters extends Converter.Factory {
  }
 ```
 
-经过以上几步，我们最终获取到一个CallAdapted对象。
+#### 3、创建请求执行器
+
+经过以上几步，我们得到一个CallAdapted对象，CallAdapted.adapt会返回一个Call对象，用于执行请求。
 
 ```java
 new CallAdapted<>(requestFactory, callFactory, responseConverter, callAdapter);
 ```
 
-## 3.4、HttpServiceMethod.invoke
-
-通过invoke方法最终会调用到callAdapter.adapt方法。
+接口执行时先调用到，经过动态代理invoke方法调用到**ServiceMethod.invoke()**，最终会调用到callAdapter.adapt方法。
 
 ```java
   @Override
   final @Nullable ReturnT invoke(Object[] args) {
+    // 传入OkHttpCall对象
     Call<ResponseT> call = new OkHttpCall<>(requestFactory, args, callFactory, responseConverter);
     return adapt(call, args);
   }
@@ -727,33 +772,11 @@ new CallAdapted<>(requestFactory, callFactory, responseConverter, callAdapter);
   }
 ```
 
-联系到3.2节的DefaultCallAdapterFactory
+结合DefaultCallAdapterFactory可知，默认会返回一个ExecutorCallbackCall的对象，该对象执行请求时使用的是传入的OkHttpCall。
 
 ```java
 final class DefaultCallAdapterFactory extends CallAdapter.Factory {
-  private final @Nullable Executor callbackExecutor;
-
-  DefaultCallAdapterFactory(@Nullable Executor callbackExecutor) {
-    this.callbackExecutor = callbackExecutor;
-  }
-
-  @Override
-  public @Nullable CallAdapter<?, ?> get(
-      Type returnType, Annotation[] annotations, Retrofit retrofit) {
-    if (getRawType(returnType) != Call.class) {
-      return null;
-    }
-    if (!(returnType instanceof ParameterizedType)) {
-      throw new IllegalArgumentException(
-          "Call return type must be parameterized as Call<Foo> or Call<? extends Foo>");
-    }
-    final Type responseType = Utils.getParameterUpperBound(0, (ParameterizedType) returnType);
-
-    final Executor executor =
-        Utils.isAnnotationPresent(annotations, SkipCallbackExecutor.class)
-            ? null
-            : callbackExecutor;
-
+    // 省略
     return new CallAdapter<Object, Call<?>>() {
       @Override
       public Type responseType() {
@@ -762,16 +785,33 @@ final class DefaultCallAdapterFactory extends CallAdapter.Factory {
 
       @Override
       public Call<Object> adapt(Call<Object> call) {
+        // adapt方法中当executor == null，就返回传入的call对象，即之前新建的OkHttpCall实例对象。
         return executor == null ? call : new ExecutorCallbackCall<>(executor, call);
       }
     };
+// ...    
+static final class ExecutorCallbackCall<T> implements Call<T> {
+    final Executor callbackExecutor;
+    final Call<T> delegate;
+
+    ExecutorCallbackCall(Executor callbackExecutor, Call<T> delegate) {
+      this.callbackExecutor = callbackExecutor;
+      this.delegate = delegate;
+    }
+    
+    @Override
+    public Response<T> execute() throws IOException {
+     // 同步请求执行
+      return delegate.execute();
+    }
+// ...
+}
+    
 ```
 
-可以看到adapt方法中当executor == null，就返回传入的call对象，即之前新建的OkHttpCall实例对象。
+# 5、请求执行过程
 
-# 4、OkHttpCall 请求执行过程
-
-请求的执行过程就是和OkHttp请求过程一致，以同步请求为例。
+OkHttpCall是Retrofit中封装的用于执行请求的对象，请求过程就是和OkHttp请求过程基本一致，以同步请求为例。
 
 ```java
 public Response<T> execute() throws IOException {
@@ -780,84 +820,65 @@ public Response<T> execute() throws IOException {
   synchronized (this) {
     if (executed) throw new IllegalStateException("Already executed.");
     executed = true;
-
+	//1、创建请求
     call = getRawCall();
   }
-
+   
   if (canceled) {
     call.cancel();
   }
-
+  // 2、执行请求并返回结果
   return parseResponse(call.execute());
 }
 ```
 
-## 4.1 createRawCall
+## 5.1、创建请求对象
 
-创建RealCall 并且生成request请求参数
+createRawCall，创建**RealCall** 并利用前面创建的RequestFactory生成具体的request请求参数。
 
 ```java
 private okhttp3.Call createRawCall() throws IOException {
+  //callFactory是OkHttpClient，callFactory.newCall 
   okhttp3.Call call = callFactory.newCall(requestFactory.create(args));
   if (call == null) {
     throw new NullPointerException("Call.Factory returned null.");
   }
   return call;
 }
+```
 
+RequestFactory.create的核心逻辑是利用ParameterHandler解析方法中请求参数的值，最终返回的是一个OkHttp的**Request**对象
 
- okhttp3.Request create(Object[] args) throws IOException {
-    @SuppressWarnings("unchecked") // It is an error to invoke a method with the wrong arg types.
-    ParameterHandler<Object>[] handlers = (ParameterHandler<Object>[]) parameterHandlers;
-
-    int argumentCount = args.length;
-    if (argumentCount != handlers.length) {
-      throw new IllegalArgumentException(
-          "Argument count ("
-              + argumentCount
-              + ") doesn't match expected count ("
-              + handlers.length
-              + ")");
-    }
-
-    RequestBuilder requestBuilder =
-        new RequestBuilder(
-            httpMethod,
-            baseUrl,
-            relativeUrl,
-            headers,
-            contentType,
-            hasBody,
-            isFormEncoded,
-            isMultipart);
-
-    if (isKotlinSuspendFunction) {
-      // The Continuation is the last parameter and the handlers array contains null at that index.
-      argumentCount--;
-    }
-     
-    // 2、解析方法中的参数
-    List<Object> argumentList = new ArrayList<>(argumentCount);
-    for (int p = 0; p < argumentCount; p++) {
-      argumentList.add(args[p]);
-      handlers[p].apply(requestBuilder, args[p]);
-    }
-
-    return requestBuilder.get().tag(Invocation.class, new Invocation(method, argumentList)).build();
+```java
+okhttp3.Request create(Object[] args) throws IOException {
+  @SuppressWarnings("unchecked") // It is an error to invoke a method with the wrong arg types.
+  ParameterHandler<Object>[] handlers = (ParameterHandler<Object>[]) parameterHandlers;
+    
+  int argumentCount = args.length;
+    
+  RequestBuilder requestBuilder =
+      new RequestBuilder(
+          httpMethod,
+          baseUrl,
+          relativeUrl,
+          headers,
+          contentType,
+          hasBody,
+          isFormEncoded,
+          isMultipart);
+  
+  // 1、使用ParameterHandler解析请求参数
+  List<Object> argumentList = new ArrayList<>(argumentCount);
+  for (int p = 0; p < argumentCount; p++) {
+    argumentList.add(args[p]);
+    handlers[p].apply(requestBuilder, args[p]);
   }
+  // 2、返回OkHttpRequest对象
+  return requestBuilder.get().tag(Invocation.class, new Invocation(method, argumentList)).build();
+}
 ```
 
-
-
-2、requestBuilder.xxx
-
-将参数放到url中
-
-```
-ParameterHandler
-```
-
-## 4.2 parseResponse
+## 5.2、处理请求结果
 
 处理请求结果，通过responseConverter解析对象。
 
@@ -904,9 +925,9 @@ Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
 }
 ```
 
+# 五、重要对象解析
 
-
-# 5、ParameterHandler
+## 5.1、ParameterHandler
 
 ![image-20210119145830519](pics/image-20210119145830519.png)
 
@@ -965,7 +986,7 @@ abstract class ParameterHandler<T> {
  }
 ```
 
-# 6、CallAdapter.Factory
+## 5.2、CallAdapter.Factory
 
 ```
 
@@ -973,7 +994,7 @@ abstract class ParameterHandler<T> {
 
 
 
-# 7、Converter.Factory
+## 5.3、Converter.Factory
 
 数据转换器有2个作用：1、将Response转换成我们需要的返回数据类型；
 
@@ -1043,19 +1064,7 @@ public interface Converter<F, T> {
 }
 ```
 
+# 六、整体框架
 
 
-整体的一个框架图
-
-
-
-onFailure
-
-
-
-onResponse
-
-
-
-Rxjava 
 
