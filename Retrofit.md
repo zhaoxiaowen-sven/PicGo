@@ -216,7 +216,7 @@ static final class Android extends Platform {
 
 ## 3.2、请求适配器
 
-Platform.defaultCallAdapterFactories
+默认情况下使用的是DefaultCallAdapterFactory，负责请求的执行以及回调结果。
 
 ```java
 final class DefaultCallAdapterFactory extends CallAdapter.Factory {
@@ -256,6 +256,8 @@ final class DefaultCallAdapterFactory extends CallAdapter.Factory {
 数据转换器有2个作用：1、将Response转换成我们需要的返回数据类型；
 
 ​                                         2、将输入的请求参数转换为ResquestBody类型。
+
+默认添加的converterFactory如下：
 
 ```java
   List<Converter.Factory> converterFactories =
@@ -931,7 +933,7 @@ Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
 
 ![image-20210119145830519](pics/image-20210119145830519.png)
 
-使用ParameterHandler.apply 解析方法参数列表，不同的ParameterHandler负责对应类型的ParameterHandler的解析。
+使用ParameterHandler.apply 解析方法参数列表，不同的ParameterHandler负责对应类型参数的解析。
 
 ```java
 abstract class ParameterHandler<T> {
@@ -988,43 +990,65 @@ abstract class ParameterHandler<T> {
 
 ## 5.2、CallAdapter.Factory
 
+```java
+public interface CallAdapter<R, T> {
+  Type responseType();
+
+  T adapt(Call<R> call);
+
+  /**
+   * Creates {@link CallAdapter} instances based on the return type of {@linkplain
+   * Retrofit#create(Class) the service interface} methods.
+   */
+  abstract class Factory {
+    /**
+     * Returns a call adapter for interface methods that return {@code returnType}, or null if it
+     * cannot be handled by this factory.
+     */
+    public abstract @Nullable CallAdapter<?, ?> get(
+        Type returnType, Annotation[] annotations, Retrofit retrofit);
+
+    /**
+     * Extract the upper bound of the generic parameter at {@code index} from {@code type}. For
+     * example, index 1 of {@code Map<String, ? extends Runnable>} returns {@code Runnable}.
+     */
+    protected static Type getParameterUpperBound(int index, ParameterizedType type) {
+      return Utils.getParameterUpperBound(index, type);
+    }
+
+    /**
+     * Extract the raw class type from {@code type}. For example, the type representing {@code
+     * List<? extends Runnable>} returns {@code List.class}.
+     */
+    protected static Class<?> getRawType(Type type) {
+      return Utils.getRawType(type);
+    }
+  }
+}
 ```
 
-```
+## 5.3、数据转换器
 
+数据转换器涉及到2个类分别是Converter 和 Converter.Factory，顾名思义，Converter.Factory是converter的工厂类。Converter用于构建数据转换器，主要有2个作用：1、将Response转换成我们需要的返回数据类型；
 
+​                2、将输入的请求参数转换为ResquestBody类型。
 
-## 5.3、Converter.Factory
-
-数据转换器有2个作用：1、将Response转换成我们需要的返回数据类型；
-
-​                                         2、将输入的请求参数转换为ResquestBody类型。
-
-![image-20210119151956195](pics/image-20210119151956195.png)
+Converter.Factory 中定义了这2种转换方式的接口
 
 ```java
 public interface Converter<F, T> {
   @Nullable
   T convert(F value) throws IOException;
-
-  /** Creates {@link Converter} instances based on a type and target usage. */
+    
   abstract class Factory {
-    /**
-     * Returns a {@link Converter} for converting an HTTP response body to {@code type}, or null if
-     * {@code type} cannot be handled by this factory. This is used to create converters for
-     * response types such as {@code SimpleResponse} from a {@code Call<SimpleResponse>}
-     * declaration.
-     */
+      
+    // 将ReponseBody转换为对象
     public @Nullable Converter<ResponseBody, ?> responseBodyConverter(
         Type type, Annotation[] annotations, Retrofit retrofit) {
       return null;
     }
 
-    /**
-     * Returns a {@link Converter} for converting {@code type} to an HTTP request body, or null if
-     * {@code type} cannot be handled by this factory. This is used to create converters for types
-     * specified by {@link Body @Body}, {@link Part @Part}, and {@link PartMap @PartMap} values.
-     */
+     // 将对象转换为RequestBody
     public @Nullable Converter<?, RequestBody> requestBodyConverter(
         Type type,
         Annotation[] parameterAnnotations,
@@ -1033,13 +1057,7 @@ public interface Converter<F, T> {
       return null;
     }
 
-    /**
-     * Returns a {@link Converter} for converting {@code type} to a {@link String}, or null if
-     * {@code type} cannot be handled by this factory. This is used to create converters for types
-     * specified by {@link Field @Field}, {@link FieldMap @FieldMap} values, {@link Header @Header},
-     * {@link HeaderMap @HeaderMap}, {@link Path @Path}, {@link Query @Query}, and {@link
-     * QueryMap @QueryMap} values.
-     */
+    // 将对象转换为String
     public @Nullable Converter<?, String> stringConverter(
         Type type, Annotation[] annotations, Retrofit retrofit) {
       return null;
@@ -1064,7 +1082,15 @@ public interface Converter<F, T> {
 }
 ```
 
+常见的Converter如下：
+
+![image-20210119151956195](pics/image-20210119151956195.png)
+
+
+
+
+
 # 六、整体框架
 
-
+![image-20210125203006574](pics/image-20210125203006574.png)
 
