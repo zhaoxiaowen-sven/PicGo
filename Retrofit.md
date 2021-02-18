@@ -253,11 +253,7 @@ final class DefaultCallAdapterFactory extends CallAdapter.Factory {
 
 ## 3.3、数据转换器
 
-数据转换器有2个作用：1、将Response转换成我们需要的返回数据类型；
-
-​                                         2、将输入的请求参数转换为ResquestBody类型。
-
-默认添加的converterFactory如下：
+数据转换器可以将Response转换成我们需要的返回数据类型，默认添加的converterFactory如下：
 
 ```java
   List<Converter.Factory> converterFactories =
@@ -330,7 +326,7 @@ ServiceMethod<?> loadServiceMethod(Method method) {
 
 loadService有2个入口，一个是在InvocationHandler中，另一个是在上一步的validateServiceInterface中。
 
-若validateEagerly参数为true，那么在生成接口的动态代理对象时，解析接口中所有的方法，生成ServiceMethod对象，否则只会在调用到具体方法时才生成相关的对象。
+若validateEagerly参数为true，那么在生成接口的动态代理对象时，解析接口中所有的方法，生成ServiceMethod对象；否则只会在调用到具体方法时才生成相关的对象。
 
 ```java
 private void validateServiceInterface(Class<?> service) {
@@ -350,7 +346,7 @@ private void validateServiceInterface(Class<?> service) {
 
 ## 4.3、ServiceMethod.parseAnnotations
 
-parseAnnotations 中主要的方法有2个，分别解析方法注解（包含方法参数注解）以及生成对应的请求适配器和网络数据转换器。
+parseAnnotations 中主要的方法有2个，作用分别是解析方法注解（包含方法参数注解）以及生成对应的请求适配器和网络数据转换器。
 
 ```java
 static <T> ServiceMethod<T> parseAnnotations(Retrofit retrofit, Method method) {
@@ -378,21 +374,21 @@ RequestFactory.parseAnnotations，通过解析方法注解和方法中的参数�
 
 ```java
 RequestFactory(Builder builder) {
-  method = builder.method;//请求方式
+  method = builder.method;//要解析的方法
   baseUrl = builder.retrofit.baseUrl;//请求地址
-  httpMethod = builder.httpMethod;
-  relativeUrl = builder.relativeUrl;
-  headers = builder.headers;
+  httpMethod = builder.httpMethod;//请求方式
+  relativeUrl = builder.relativeUrl;//相对地址
+  headers = builder.headers;//header参数
   contentType = builder.contentType;
   hasBody = builder.hasBody;
   isFormEncoded = builder.isFormEncoded;
   isMultipart = builder.isMultipart;
-  parameterHandlers = builder.parameterHandlers;
+  parameterHandlers = builder.parameterHandlers;//方法参数解析器
   isKotlinSuspendFunction = builder.isKotlinSuspendFunction;
 }
 ```
 
-可以看到RequestFactory中的对象和接口的方法注解对象基本是一一对应的，RequestFactory创建时使用了Builder模式。
+可以看到RequestFactory中的对象和接口的方法注解对象（Http协议参数）基本是一一对应的，RequestFactory创建时使用了Builder模式。
 
 ```java
 static RequestFactory parseAnnotations(Retrofit retrofit, Method method) {
@@ -822,7 +818,7 @@ public Response<T> execute() throws IOException {
   synchronized (this) {
     if (executed) throw new IllegalStateException("Already executed.");
     executed = true;
-	//1、创建请求
+	// 1、创建请求
     call = getRawCall();
   }
    
@@ -929,18 +925,30 @@ Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
 
 # 五、重要对象解析
 
-## 5.1、ParameterHandler
+## 5.1、ParameterHandler详解
+
+#### 5.1.1、作用
+
+ParameterHandler对象是在RequestFactory创建时生成的，参考4.3.1节；在请求Request对象创建过程中，使用ParameterHandler.apply 解析方法参数列表，不同的ParameterHandler负责对应类型参数的解析。主要的ParameterHandler类型有如下几种：
 
 ![image-20210119145830519](pics/image-20210119145830519.png)
 
-使用ParameterHandler.apply 解析方法参数列表，不同的ParameterHandler负责对应类型参数的解析。
+#### 5.1.2、分析
+
+ParameterHandler是一个抽象类，定义的抽象方法是：
+
+```java
+abstract void apply(RequestBuilder builder, @Nullable T value) throws IOException;
+```
+
+此外还有2个方法分别用于解析集合和数组类型参数，通过遍历的方式使用apply解析方法参数。
 
 ```java
 abstract class ParameterHandler<T> {
   // 方法参数解析
   abstract void apply(RequestBuilder builder, @Nullable T value) throws IOException;
 
-  // 多个参数ParameterHandler的解析
+  // 集合类型参数ParameterHandler的解析
   final ParameterHandler<Iterable<T>> iterable() {
     return new ParameterHandler<Iterable<T>>() {
       @Override
@@ -953,7 +961,7 @@ abstract class ParameterHandler<T> {
       }
     };
   }
- // 多个参数的解析
+ // 数组类型多个参数的解析
   final ParameterHandler<Object> array() {
     return new ParameterHandler<Object>() {
       @Override
@@ -968,27 +976,40 @@ abstract class ParameterHandler<T> {
     };
   }
     
-  static final class RelativeUrl extends ParameterHandler<Object> {
-    private final Method method;
-    private final int p;
+  static final class Header<T> extends ParameterHandler<T> {
+    private final String name;
+    private final Converter<T, String> valueConverter;
 
-    RelativeUrl(Method method, int p) {
-      this.method = method;
-      this.p = p;
+    Header(String name, Converter<T, String> valueConverter) {
+      this.name = Objects.requireNonNull(name, "name == null");
+      this.valueConverter = valueConverter;
     }
 
     @Override
-    void apply(RequestBuilder builder, @Nullable Object value) {
-      if (value == null) {
-        throw Utils.parameterError(method, p, "@Url parameter is null.");
-      }
-      builder.setRelativeUrl(value);
+    void apply(RequestBuilder builder, @Nullable T value) throws IOException {
+      if (value == null) return; // Skip null values.
+      // 1、使用对应的converter解析注解参数
+      String headerValue = valueConverter.convert(value);
+      if (headerValue == null) return; // Skip converted but null values.
+      // 2、将参数添加到requestBuilder中
+      builder.addHeader(name, headerValue);
     }
+  }
  //...
  }
 ```
 
-## 5.2、CallAdapter.Factory
+所有类型的ParameterHandler都定义在ParameterHandler中，以Header注解的解析器为例介绍下参数解析过程。
+
+46 - 49 行，解析过程中有2个关键步骤：1、使用Converter解析注解参数，converter其实是数据转化器，也就是说converter除了可以将reponse转换成需要的对象外，还可以将输入的请求参数转换为request的参数；
+
+2、将参数添加到RequestBuilder中。
+
+总结一下，**ParameterHandler的作用就是将方法参数值转换为Request中相应的请求参数**。
+
+## 5.2、请求适配器
+
+请求适配器CallAdapter.Factory，数据转换器涉及到2个类分别是CallAdapter 和 CallAdapter.Factory，
 
 ```java
 public interface CallAdapter<R, T> {
@@ -1029,11 +1050,13 @@ public interface CallAdapter<R, T> {
 
 ## 5.3、数据转换器
 
-数据转换器涉及到2个类分别是Converter 和 Converter.Factory，顾名思义，Converter.Factory是converter的工厂类。Converter用于构建数据转换器，主要有2个作用：1、将Response转换成我们需要的返回数据类型；
+数据转换器涉及到2个类分别是Converter 和 Converter.Factory，顾名思义，Converter.Factory是converter的工厂类。常见的Converter如下：
 
-​                2、将输入的请求参数转换为ResquestBody类型。
+![image-20210119151956195](pics/image-20210119151956195.png)
 
-Converter.Factory 中定义了这2种转换方式的接口
+#### 5.3.1、分析
+
+Converter用于构建数据转换器，主要有2个作用：1、将Response转换成我们需要的返回数据类型；2、将输入的请求参数转换为ResquestBody或String。Converter.Factory 中定义了这2种转换方式的接口：
 
 ```java
 public interface Converter<F, T> {
@@ -1082,13 +1105,93 @@ public interface Converter<F, T> {
 }
 ```
 
-常见的Converter如下：
+#### 5.3.2、Gson转化
 
-![image-20210119151956195](pics/image-20210119151956195.png)
+以最常见的Gson数据的说明一下Converter的作用，GsonConverterFactory利用GsonResponseBodyConverter和GsonRequestBodyConverter将Gson和需要的数据类型相互转化。
 
+```java
+public final class GsonConverterFactory extends Converter.Factory {
+  
+  //...
+  private final Gson gson;
 
+  private GsonConverterFactory(Gson gson) {
+    this.gson = gson;
+  }
 
+  @Override
+  public Converter<ResponseBody, ?> responseBodyConverter(
+      Type type, Annotation[] annotations, Retrofit retrofit) {
+    TypeAdapter<?> adapter = gson.getAdapter(TypeToken.get(type));
+    return new GsonResponseBodyConverter<>(gson, adapter);
+  }
 
+  @Override
+  public Converter<?, RequestBody> requestBodyConverter(
+      Type type,
+      Annotation[] parameterAnnotations,
+      Annotation[] methodAnnotations,
+      Retrofit retrofit) {
+    TypeAdapter<?> adapter = gson.getAdapter(TypeToken.get(type));
+    return new GsonRequestBodyConverter<>(gson, adapter);
+  }
+}
+```
+
+##### 1、GsonResponseBodyConverter
+
+```java
+final class GsonResponseBodyConverter<T> implements Converter<ResponseBody, T> {
+  private final Gson gson;
+  private final TypeAdapter<T> adapter;
+
+  GsonResponseBodyConverter(Gson gson, TypeAdapter<T> adapter) {
+    this.gson = gson;
+    this.adapter = adapter;
+  }
+
+  @Override
+  public T convert(ResponseBody value) throws IOException {
+    JsonReader jsonReader = gson.newJsonReader(value.charStream());
+    try {
+      T result = adapter.read(jsonReader);
+      if (jsonReader.peek() != JsonToken.END_DOCUMENT) {
+        throw new JsonIOException("JSON document was not fully consumed.");
+      }
+      return result;
+    } finally {
+      value.close();
+    }
+  }
+}
+```
+
+##### 2、GsonRequestBodyConverter
+
+```java
+final class GsonRequestBodyConverter<T> implements Converter<T, RequestBody> {
+  private static final MediaType MEDIA_TYPE = MediaType.get("application/json; charset=UTF-8");
+  private static final Charset UTF_8 = Charset.forName("UTF-8");
+
+  private final Gson gson;
+  private final TypeAdapter<T> adapter;
+
+  GsonRequestBodyConverter(Gson gson, TypeAdapter<T> adapter) {
+    this.gson = gson;
+    this.adapter = adapter;
+  }
+
+  @Override
+  public RequestBody convert(T value) throws IOException {
+    Buffer buffer = new Buffer();
+    Writer writer = new OutputStreamWriter(buffer.outputStream(), UTF_8);
+    JsonWriter jsonWriter = gson.newJsonWriter(writer);
+    adapter.write(jsonWriter, value);
+    jsonWriter.close();
+    return RequestBody.create(MEDIA_TYPE, buffer.readByteString());
+  }
+}
+```
 
 # 六、整体框架
 
