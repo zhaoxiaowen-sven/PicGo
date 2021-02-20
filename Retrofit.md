@@ -4,9 +4,13 @@
 
 ## 1.1、gradle依赖
 
-```
+```java
 implementation 'com.squareup.retrofit2:retrofit:2.9.0'
 implementation 'com.squareup.retrofit2:converter-gson:2.9.0'
+// 配合RxJava
+implementation 'com.squareup.retrofit2:adapter-rxjava3:2.9.0'
+// RxAndroid的依赖包
+implementation 'io.reactivex.rxjava3:rxandroid:3.0.0'
 ```
 
 ## 1.2、定义接口
@@ -67,11 +71,9 @@ getApi.getUserInfo(params).enqueue(new Callback<UserInfo>() {
 
 | 注解名         | 参数                                                         |
 | -------------- | ------------------------------------------------------------ |
-| FormUrlEncoded | 用于POST请求，表示请求体是一个Form表单，常见的网址登录就是这种类型，对应的HEAD参数是Content-Type：application/x-www-form-urlencoded |
+| FormUrlEncoded | 用于POST请求，表示请求体是一个Form表单，常见的网址登录就是这种类型，对应的HEAD参数是Content-Type：application/x-www-form-urlencoded，[HTTP content-type](https://www.runoob.com/http/http-content-type.html) |
 | Multipart      | 用于POST请求，表单上传文件时使用                             |
 | Streaming      | 表示响应体的数据使用流的方式返回处理，主要用于文件下载       |
-
-[HTTP content-type](https://www.runoob.com/http/http-content-type.html)
 
 ## 2.3、参数类
 
@@ -95,17 +97,7 @@ getApi.getUserInfo(params).enqueue(new Callback<UserInfo>() {
 
 ### 2.3.2、文件上传
 
-文件上传时有2种方式 RequestBody  和 MultiPart使用？？？
-
-![image-20201208170446774](pics/image-20201208170446774.png)
-
-![image-20201208170210061](pics/image-20201208170210061.png)
-
-
-
-![image-20201208172412229](pics/image-20201208172412229.png)
-
-[这是一份很详细的 Retrofit 2.0 使用教程](https://blog.csdn.net/carson_ho/article/details/73732076)
+通常使用Part和PartMap 配合Multipart使用；还有一种方式直接使用Body实现，此时不能增加Multipart。文件上传这里还是比较复杂的，有时间再仔细讲讲。
 
 [Retrofit学习之文件和参数上传](https://www.jianshu.com/p/74b7da380855)
 
@@ -179,15 +171,24 @@ public Retrofit build() {
 
 ## 3.1、请求执行器
 
-负责真正发送请求，默认是okHttpClient
+负责真正发送请求，其实就是OkHttpClient
 
 ```java
  callFactory = new OkHttpClient();
 ```
 
+## 3.2、请求适配器
+
+**负责请求的执行以及回调结果**，默认添加的请求适配器如下，关于。
+
+```java
+  List<CallAdapter.Factory> callAdapterFactories = new ArrayList<>(this.callAdapterFactories);
+  callAdapterFactories.addAll(platform.defaultCallAdapterFactories(callbackExecutor));
+```
+
 ## 3.2、数据转换器
 
-数据转换器可以将Response转换成我们需要的返回数据类型，默认添加的converterFactory如下：
+Converter用于构建数据转换器，主要有2个作用：1、将Response转换成我们需要的返回数据类型；2、将输入的请求参数转换为ResquestBody或String。默认添加的converterFactory如下，关于数据转换器的详细说明，后面再介绍：
 
 ```java
   List<Converter.Factory> converterFactories =
@@ -201,95 +202,7 @@ public Retrofit build() {
   converterFactories.addAll(platform.defaultConverterFactories());
 ```
 
-## 3.3、请求适配器
-
-**负责请求的执行以及回调结果**，先介绍下默认的请求适配器DefaultCallAdapterFactory的原理。
-
-```java
-final class DefaultCallAdapterFactory extends CallAdapter.Factory {
-  private final @Nullable Executor callbackExecutor;
-
-  DefaultCallAdapterFactory(@Nullable Executor callbackExecutor) {
-    this.callbackExecutor = callbackExecutor;
-  }
-
-  @Override
-  public @Nullable CallAdapter<?, ?> get(
-      Type returnType, Annotation[] annotations, Retrofit retrofit) {
-	// ...
-    final Type responseType = Utils.getParameterUpperBound(0, (ParameterizedType) returnType);
-
-    final Executor executor =
-        Utils.isAnnotationPresent(annotations, SkipCallbackExecutor.class)
-            ? null
-            : callbackExecutor;
-
-    return new CallAdapter<Object, Call<?>>() {
-      @Override
-      public Type responseType() {
-        return responseType;
-      }
-
-      @Override
-      public Call<Object> adapt(Call<Object> call) {
-        return executor == null ? call : new ExecutorCallbackCall<>(executor, call);
-      }
-    };
-  }
-```
-
-33行：ExecutorCallbackCall，具体处理请求的执行以及callback回调。
-
-```java
-static final class ExecutorCallbackCall<T> implements Call<T> {
-  final Executor callbackExecutor;
-  final Call<T> delegate;
-
-  ExecutorCallbackCall(Executor callbackExecutor, Call<T> delegate) {
-    this.callbackExecutor = callbackExecutor;
-    this.delegate = delegate;
-  }
-
-  @Override
-  public void enqueue(final Callback<T> callback) {
-    Objects.requireNonNull(callback, "callback == null");
-
-    delegate.enqueue(
-        new Callback<T>() {
-          @Override
-          public void onResponse(Call<T> call, final Response<T> response) {
-            callbackExecutor.execute(
-                () -> {
-                  if (delegate.isCanceled()) {
-                    // Emulate OkHttp's behavior of throwing/delivering an IOException on
-                    // cancellation.
-                    callback.onFailure(ExecutorCallbackCall.this, new IOException("Canceled"));
-                  } else {
-                    callback.onResponse(ExecutorCallbackCall.this, response);
-                  }
-                });
-          }
-
-          @Override
-          public void onFailure(Call<T> call, final Throwable t) {
-            callbackExecutor.execute(() -> callback.onFailure(ExecutorCallbackCall.this, t));
-          }
-        });
-  }
-
-  @Override
-  public Response<T> execute() throws IOException {
-    return delegate.execute();
-  }
-  // ... 省略
-}
-```
-
-14行：异步请求的执行，执行的是传入call对象的enqueue方法；
-
-18行/31行：分别是请求成功和失败时，通过回调执行器进行回调；
-
-38行：同步请求的执行，执行的是传入call对象的execute方法。
+注意一下以上添加的请求适配器和请求转化器都是xxxFactory对象。
 
 ## 3.4、回调执行器
 
@@ -329,7 +242,9 @@ static final class Android extends Platform {
 }
 ```
 
-# 四、接口创建过程
+经过以上几步，retrofit执行时需要的组件基本都添加完毕了。
+
+# 四、ServiceMethod创建
 
 ## 4.1、创建接口代理对象
 
@@ -364,7 +279,7 @@ public <T> T create(final Class<T> service) {
 }
 ```
 
-## 4.2、创建ServiceMethod
+## 4.2、loadServiceMethod
 
 loadServiceMethod，根据方法的相关注解，生成对应的ServiceMethod对象。
 
@@ -428,7 +343,7 @@ static <T> ServiceMethod<T> parseAnnotations(Retrofit retrofit, Method method) {
   }
 ```
 
-### 4.3.1、创建RequestFactory
+### 4.2.1、创建RequestFactory
 
 RequestFactory，负责构造请求参数。通过解析方法注解和方法中的参数注解生成一个RequestFactory对象，**包含请求设定的参数**。我们先看一下RequestFactory中有哪些对象。
 
@@ -513,7 +428,7 @@ RequestFactory build() {
 
 #### 1、解析**方法注解**
 
-​      parseMethodAnnotation，**解析方法注解**，主要是请求方式，HEADER等。
+​      parseMethodAnnotation，**解析方法注解**，主要是请求方式，HEADER参数等。
 
 ```java
 private void parseMethodAnnotation(Annotation annotation) {
@@ -596,7 +511,7 @@ private void parseHttpMethodAndPath(String httpMethod, String value, boolean has
 
 #### 2、解析方法参数注解
 
-parseParameterAnnotation, 解析方法参数注解，生成对应的ParameterHandler；在执行请求时，通过ParameterHandler将相关参数值转化为请求参数；负责转化请求参数的是converter。
+parseParameterAnnotation, 解析方法参数注解，生成对应的**ParameterHandler**；在执行请求时，通过ParameterHandler将相关参数值转化为请求参数；负责转化请求参数的是converter。
 
 ```java
 private ParameterHandler<?> parseParameterAnnotation(
@@ -660,7 +575,7 @@ else if (annotation instanceof QueryName) {
 
 通过以上源码可以清晰的看到，1、Query参数是支持集合和数组；2、Query参数默认的数据转换器StringConverter，将入参全部装换为String，以字符串的方式拼接到请求里。
 
-### 4.3.2、创建HttpServiceMethod
+### 4.2.2、创建HttpServiceMethod
 
 HttpServiceMethod继承了ServiceMethod， parseAnnotations 负责创建请求适配器 、数据转化器 、 请求执行器。
 
@@ -686,7 +601,7 @@ static <ResponseT, ReturnT> HttpServiceMethod<ResponseT, ReturnT> parseAnnotatio
 
 6行：createCallAdapter，默认情况下返回的是初始化时的**DefaultCallAdapterFactory**对象
 
-```
+```java
 private static <ResponseT, ReturnT> CallAdapter<ResponseT, ReturnT> createCallAdapter(
     Retrofit retrofit, Method method, Type returnType, Annotation[] annotations) {
   try {
@@ -712,13 +627,13 @@ private static <ResponseT> Converter<ResponseBody, ResponseT> createResponseConv
 }
 ```
 
-16行：经过以上几步，我们得到一个CallAdapted对象，CallAdapted继承自HttpServiceMethod，CallAdapted.adapt会返回一个Call对象，用于执行请求。
+16行：经过以上几步，我们得到一个CallAdapted对象，这个CallAdapted其实是继承自HttpServiceMethod，CallAdapted.adapt方法会返回一个Call对象，用于执行请求。
 
 ```java
 new CallAdapted<>(requestFactory, callFactory, responseConverter, callAdapter);
 ```
 
-可以看到CallAdapted的构造方法中包含了所有请求过程的需要的对象。
+可以看到CallAdapted的构造方法中包含了请求过程的需要的所有对象。
 
 ## 4.3、HttpServiceMethod.invoke
 
@@ -758,7 +673,7 @@ abstract class HttpServiceMethod<ResponseT, ReturnT> extends ServiceMethod<Retur
 
 7-8行：构造OkHttpCall对象，调用adapt方法，最终调用到第26行 callAdapter.adapt，传入的参数是OkHttpCall。这里的callAdapter默认是DefaultCallAdapterFactory，结合3.3节的内容，最终请求执行时调用的是OkHttpCall的方法。
 
-# 5、请求执行过程
+# 五、请求执行过程
 
 OkHttpCall是Retrofit中封装的用于执行请求的对象，请求过程就是和OkHttp请求过程基本一致，以同步请求为例。
 
@@ -878,17 +793,306 @@ Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
 }
 ```
 
-# 五、重要对象解析
+# 六、重要对象解析
 
-## 5.1、ParameterHandler详解
+## 5.1、请求适配器
 
-#### 5.1.1、介绍
+请求适配器CallAdapter.Factory，数据转换器涉及到2个类分别是CallAdapter 和 CallAdapter.Factory，看下它的核心方法。
+
+```java
+public interface CallAdapter<R, T> {
+
+  // 返回值类型
+  Type responseType();
+
+  // 执行请求  
+  T adapt(Call<R> call);
+
+  abstract class Factory {
+	
+    // 根据returnType返回相应的CallAdapter
+    public abstract @Nullable CallAdapter<?, ?> get(
+        Type returnType, Annotation[] annotations, Retrofit retrofit);
+  }
+  // 省略...
+}
+```
+
+### 5.1.1、DefaultCallAdapterFactory
+
+DefaultCallAdapterFactory是Retrofit默认添加的请求适配器，看下它的源码。
+
+```java
+final class DefaultCallAdapterFactory extends CallAdapter.Factory {
+  private final @Nullable Executor callbackExecutor;
+
+  DefaultCallAdapterFactory(@Nullable Executor callbackExecutor) {
+    this.callbackExecutor = callbackExecutor;
+  }
+
+  @Override
+  public @Nullable CallAdapter<?, ?> get(
+      Type returnType, Annotation[] annotations, Retrofit retrofit) {
+    final Type responseType = Utils.getParameterUpperBound(0, (ParameterizedType) returnType);
+
+    final Executor executor =
+        Utils.isAnnotationPresent(annotations, SkipCallbackExecutor.class)
+            ? null
+            : callbackExecutor;
+
+    return new CallAdapter<Object, Call<?>>() {
+      @Override
+      public Type responseType() {
+        return responseType;
+      }
+
+      @Override
+      public Call<Object> adapt(Call<Object> call) {
+        // 执行请求
+        return executor == null ? call : new ExecutorCallbackCall<>(executor, call);
+      }
+    };
+  }
+```
+
+26行：**ExecutorCallbackCall，**具体处理请求的执行以及callback回调。
+
+```java
+static final class ExecutorCallbackCall<T> implements Call<T> {
+  final Executor callbackExecutor;
+  final Call<T> delegate;
+
+  ExecutorCallbackCall(Executor callbackExecutor, Call<T> delegate) {
+    this.callbackExecutor = callbackExecutor;
+    this.delegate = delegate;
+  }
+
+  @Override
+  public void enqueue(final Callback<T> callback) {
+    Objects.requireNonNull(callback, "callback == null");
+
+    delegate.enqueue(
+        new Callback<T>() {
+          @Override
+          public void onResponse(Call<T> call, final Response<T> response) {
+            callbackExecutor.execute(
+                () -> {
+                  if (delegate.isCanceled()) {
+                    // Emulate OkHttp's behavior of throwing/delivering an IOException on
+                    // cancellation.
+                    callback.onFailure(ExecutorCallbackCall.this, new IOException("Canceled"));
+                  } else {
+                    callback.onResponse(ExecutorCallbackCall.this, response);
+                  }
+                });
+          }
+
+          @Override
+          public void onFailure(Call<T> call, final Throwable t) {
+            callbackExecutor.execute(() -> callback.onFailure(ExecutorCallbackCall.this, t));
+          }
+        });
+  }
+
+  @Override
+  public Response<T> execute() throws IOException {
+    return delegate.execute();
+  }
+  // ... 省略
+}
+```
+
+14行：异步请求的执行，执行的是传入call对象的enqueue方法；
+
+18行/31行：分别是请求成功和失败时，通过回调执行器进行回调；
+
+38行：同步请求的执行，执行的是传入call对象的execute方法。
+
+总结下：**CallAdapter负责请求的执行以及回调结果，通过自定义CallAdapter可以方便处理回调结果。**Retrofit通常都是和RxJava组合使用，利用RxJavaXXXAdapter接口的返回结果改为 Observable对象，这里就不过多介绍了，网上资料很多。
+
+## 5.2、数据转换器
+
+数据转换器涉及到2个类分别是Converter 和 Converter.Factory，Converter.Factory是converter的工厂类。常见的Converter如下：
+
+![image-20210119151956195](pics/image-20210119151956195.png)
+
+Converter.Factory 中定义了这2种转换方式的接口：
+
+```java
+public interface Converter<F, T> {
+  @Nullable
+  T convert(F value) throws IOException;
+    
+  abstract class Factory {
+      
+    // 将ReponseBody转换为对象
+    public @Nullable Converter<ResponseBody, ?> responseBodyConverter(
+        Type type, Annotation[] annotations, Retrofit retrofit) {
+      return null;
+    }
+
+     // 将对象转换为RequestBody
+    public @Nullable Converter<?, RequestBody> requestBodyConverter(
+        Type type,
+        Annotation[] parameterAnnotations,
+        Annotation[] methodAnnotations,
+        Retrofit retrofit) {
+      return null;
+    }
+
+    // 将对象转换为String
+    public @Nullable Converter<?, String> stringConverter(
+        Type type, Annotation[] annotations, Retrofit retrofit) {
+      return null;
+    }
+    // 省略...
+  }
+}
+```
+
+也就是说一个Retrofit请求通常会有2个converter分别是**RequestBodyConverter**和**ResponseBodyConverter**，顾名思义，一个负责请求数据的转换，一个负责返回数据的转换。
+
+#### 5.2.1、RequestBodyConverter
+
+先来看下RequestBodyConverter，RequestBodyConverter创建的地方是在解析方法注解生成ParameterHandler时，通过Retrofit.stringConverter生成。
+
+```java
+public <T> Converter<T, String> stringConverter(Type type, Annotation[] annotations) {
+  Objects.requireNonNull(type, "type == null");
+  Objects.requireNonNull(annotations, "annotations == null");
+
+  for (int i = 0, count = converterFactories.size(); i < count; i++) {
+    Converter<?, String> converter =
+        converterFactories.get(i).stringConverter(type, annotations, this);
+    if (converter != null) {
+      //noinspection unchecked
+      return (Converter<T, String>) converter;
+    }
+  }
+
+  // Nothing matched. Resort to default converter which just calls toString().
+  //noinspection unchecked
+  return (Converter<T, String>) BuiltInConverters.ToStringConverter.INSTANCE;
+}
+```
+
+6-8行：遍历所有的converter，根据请求的参数类型，匹配到相应的converter，保底返回的是BuiltInConverters.ToStringConverter，ToStringConverter多用于转换注解 @Header, @HeaderMap, @Path, @Query 和 @QueryMap 标记的参数。
+
+```java
+static final class ToStringConverter implements Converter<Object, String> {
+  static final ToStringConverter INSTANCE = new ToStringConverter();
+
+  @Override
+  public String convert(Object value) {
+    return value.toString();
+  }
+}
+```
+
+#### 5.2.2、ResponseBodyConverter
+
+ResponseBodyConverter，是在ServiceMethod解析注解过程中创建的（4.3.2），HttpServiceMethod.createResponseConverter经过一系列的调用，最终调用到的是nextResponseBodyConverter。
+
+```java
+public <T> Converter<ResponseBody, T> nextResponseBodyConverter(
+      @Nullable Converter.Factory skipPast, Type type, Annotation[] annotations) {
+    Objects.requireNonNull(type, "type == null");
+    Objects.requireNonNull(annotations, "annotations == null");
+
+    int start = converterFactories.indexOf(skipPast) + 1;
+    for (int i = start, count = converterFactories.size(); i < count; i++) {
+      Converter<ResponseBody, ?> converter =
+          converterFactories.get(i).responseBodyConverter(type, annotations, this);
+      if (converter != null) {
+        //noinspection unchecked
+        return (Converter<ResponseBody, T>) converter;
+      }
+    }
+```
+
+7-12行：根据responseType匹配到对应的converter，这些converter在构造Retrofit时都初始化好了。
+
+#### 5.2.3、BuiltInConverters
+
+BuiltInConverters是Retrofit中默认提供的转换器，分析下源码：
+
+```java
+final class BuiltInConverters extends Converter.Factory {
+
+  @Override
+  public @Nullable Converter<ResponseBody, ?> responseBodyConverter(
+      Type type, Annotation[] annotations, Retrofit retrofit) {
+  //方法返回值类型type必须为ResponseBody或者Void，转化后的类型为ResponseBody。
+  //返回相应的Converter实例，其他的类型都处理不了，直接返回null
+    if (type == ResponseBody.class) {
+      return Utils.isAnnotationPresent(annotations, Streaming.class)
+          ? StreamingResponseBodyConverter.INSTANCE
+          : BufferingResponseBodyConverter.INSTANCE;
+    }
+    if (type == Void.class) {
+      return VoidResponseBodyConverter.INSTANCE;
+    }
+    return null;
+  }
+
+  @Override
+  public @Nullable Converter<?, RequestBody> requestBodyConverter(
+      Type type,
+      Annotation[] parameterAnnotations,
+      Annotation[] methodAnnotations,
+      Retrofit retrofit) {
+    // 要求方法的请求参数type必须为RequestBody类型，得到的类型也是RequestBody，没有做任何类型转换，
+    // 回相应的Converter实例，其他的类型都处理不了，直接返回null  
+    if (RequestBody.class.isAssignableFrom(Utils.getRawType(type))) {
+      return RequestBodyConverter.INSTANCE;
+    }
+    return null;
+  }
+
+  static final class RequestBodyConverter implements Converter<RequestBody, RequestBody> {
+    static final RequestBodyConverter INSTANCE = new RequestBodyConverter();
+
+    @Override
+    public RequestBody convert(RequestBody value) {
+      return value;
+    }
+  }
+
+  static final class StreamingResponseBodyConverter
+      implements Converter<ResponseBody, ResponseBody> {
+    static final StreamingResponseBodyConverter INSTANCE = new StreamingResponseBodyConverter();
+
+    @Override
+    public ResponseBody convert(ResponseBody value) {
+      return value;
+    }
+  }
+    
+  // 多用于请求参数转化，结合5.2.1节RequestBodyConverter理解
+  static final class ToStringConverter implements Converter<Object, String> {
+    static final ToStringConverter INSTANCE = new ToStringConverter();
+
+    @Override
+    public String convert(Object value) {
+      return value.toString();
+    }
+  }
+}
+```
+
+通过以上源码我们可以解释很多Retrofit2的行为，例如 1：如果不添加自定义Converter，我们在定义方法时方法的入参的类型只能是RequestBody或者String，而返回值的泛型参数类型也只能是RequestBody 或者Void的现象。 2：如果不使用@Stream 注解标识方法，那么下载大文件时会发生OOM的问题，因为其会将返回数据一次性载入内存中。
+
+如果是仅仅使用默认的Converter的话Retrofit2的使用将会受到极大的限制，可以通过自定义converter的方式来满足我们的不同数据转换需求，这也是Retrofit的核心功能之一。
+
+## 5.3、ParameterHandler详解
+
+#### 5.3.1、介绍
 
 ParameterHandler对象是在RequestFactory创建时生成的，参考4.3.1节；在请求Request对象创建过程中，使用ParameterHandler.apply 解析方法参数列表，不同的ParameterHandler负责对应类型参数的解析。主要的ParameterHandler类型有如下几种：
 
 ![image-20210119145830519](pics/image-20210119145830519.png)
 
-#### 5.1.2、分析
+#### 5.3.2、分析
 
 ParameterHandler是一个抽象类，定义的抽象方法是：
 
@@ -956,247 +1160,24 @@ abstract class ParameterHandler<T> {
 
 所有类型的ParameterHandler都定义在ParameterHandler中，以Header注解的解析器为例介绍下参数解析过程。
 
-46 - 49 行，解析过程中有2个关键步骤：1、使用Converter解析注解参数，converter其实是数据转化器，也就是说converter除了可以将reponse转换成需要的对象外，还可以将方法输入的参数转换为request的请求参数，这部分在下一节详细介绍下；
-
-2、将参数添加到RequestBuilder中。
+46 - 49 行，解析过程中有2个关键步骤：1、使用Converter解析注解参数；2、将参数添加到RequestBuilder中。
 
 总结一下，**ParameterHandler的作用就是将方法参数值转换为Request中相应的请求参数**。
 
-## 5.2、数据转换器
+# 七、整体框架
 
-数据转换器涉及到2个类分别是Converter 和 Converter.Factory，Converter.Factory是converter的工厂类。常见的Converter如下：
-
-![image-20210119151956195](pics/image-20210119151956195.png)
-
-Converter用于构建数据转换器，主要有2个作用：1、将Response转换成我们需要的返回数据类型；2、将输入的请求参数转换为ResquestBody或String。Converter.Factory 中定义了这2种转换方式的接口：
-
-```java
-public interface Converter<F, T> {
-  @Nullable
-  T convert(F value) throws IOException;
-    
-  abstract class Factory {
-      
-    // 将ReponseBody转换为对象
-    public @Nullable Converter<ResponseBody, ?> responseBodyConverter(
-        Type type, Annotation[] annotations, Retrofit retrofit) {
-      return null;
-    }
-
-     // 将对象转换为RequestBody
-    public @Nullable Converter<?, RequestBody> requestBodyConverter(
-        Type type,
-        Annotation[] parameterAnnotations,
-        Annotation[] methodAnnotations,
-        Retrofit retrofit) {
-      return null;
-    }
-
-    // 将对象转换为String
-    public @Nullable Converter<?, String> stringConverter(
-        Type type, Annotation[] annotations, Retrofit retrofit) {
-      return null;
-    }
-
-    /**
-     * Extract the upper bound of the generic parameter at {@code index} from {@code type}. For
-     * example, index 1 of {@code Map<String, ? extends Runnable>} returns {@code Runnable}.
-     */
-    protected static Type getParameterUpperBound(int index, ParameterizedType type) {
-      return Utils.getParameterUpperBound(index, type);
-    }
-
-    /**
-     * Extract the raw class type from {@code type}. For example, the type representing {@code
-     * List<? extends Runnable>} returns {@code List.class}.
-     */
-    protected static Class<?> getRawType(Type type) {
-      return Utils.getRawType(type);
-    }
-  }
-}
-```
-
-也就是说一个Retrofit请求通常会有2个converter分别是**RequestBodyConverter**和**ResponseBodyConverter**，顾名思义，一个负责请求数据的转换，一个负责返回数据的转换。
-
-#### 5.2.1、RequestBodyConverter
-
-先来看下RequestBodyConverter，RequestBodyConverter创建的地方是在解析方法注解生成ParameterHandler时，通过Retrofit.stringConverter生成。
-
-```java
-public <T> Converter<T, String> stringConverter(Type type, Annotation[] annotations) {
-  Objects.requireNonNull(type, "type == null");
-  Objects.requireNonNull(annotations, "annotations == null");
-
-  for (int i = 0, count = converterFactories.size(); i < count; i++) {
-    Converter<?, String> converter =
-        converterFactories.get(i).stringConverter(type, annotations, this);
-    if (converter != null) {
-      //noinspection unchecked
-      return (Converter<T, String>) converter;
-    }
-  }
-
-  // Nothing matched. Resort to default converter which just calls toString().
-  //noinspection unchecked
-  return (Converter<T, String>) BuiltInConverters.ToStringConverter.INSTANCE;
-}
-```
-
-6-8行：遍历所有的converter，根据请求的参数类型，匹配到相应的converter，保底返回的是BuiltInConverters.ToStringConverter，ToStringConverter多用于转换注解 @Header, @HeaderMap, @Path, @Query 和 @QueryMap 标记的参数。
-
-```java
-static final class ToStringConverter implements Converter<Object, String> {
-  static final ToStringConverter INSTANCE = new ToStringConverter();
-
-  @Override
-  public String convert(Object value) {
-    return value.toString();
-  }
-}
-```
-
-#### 5.2.2、ResponseBodyConverter
-
-ResponseBodyConverter，是在ServiceMethod解析注解过程中创建的（4.3.2），HttpServiceMethod.createResponseConverter经过一系列的调用，最终调用到的是nextResponseBodyConverter。
-
-```java
-public <T> Converter<ResponseBody, T> nextResponseBodyConverter(
-      @Nullable Converter.Factory skipPast, Type type, Annotation[] annotations) {
-    Objects.requireNonNull(type, "type == null");
-    Objects.requireNonNull(annotations, "annotations == null");
-
-    int start = converterFactories.indexOf(skipPast) + 1;
-    for (int i = start, count = converterFactories.size(); i < count; i++) {
-      Converter<ResponseBody, ?> converter =
-          converterFactories.get(i).responseBodyConverter(type, annotations, this);
-      if (converter != null) {
-        //noinspection unchecked
-        return (Converter<ResponseBody, T>) converter;
-      }
-    }
-```
-
-7-12行：根据responseType匹配到对应的converter，这些converter在构造Retrofit时都初始化好了。
-
-#### 5.2.3、GsonConverterFactory
-
-以最常见的Gson数据的说明一下Converter的作用，GsonConverterFactory利用GsonResponseBodyConverter和GsonRequestBodyConverter将Gson和需要的数据类型相互转化。
-
-```java
-public final class GsonConverterFactory extends Converter.Factory {
-  
-  //...
-  private final Gson gson;
-
-  private GsonConverterFactory(Gson gson) {
-    this.gson = gson;
-  }
-
-  @Override
-  public Converter<ResponseBody, ?> responseBodyConverter(
-      Type type, Annotation[] annotations, Retrofit retrofit) {
-    TypeAdapter<?> adapter = gson.getAdapter(TypeToken.get(type));
-    return new GsonResponseBodyConverter<>(gson, adapter);
-  }
-
-  @Override
-  public Converter<?, RequestBody> requestBodyConverter(
-      Type type,
-      Annotation[] parameterAnnotations,
-      Annotation[] methodAnnotations,
-      Retrofit retrofit) {
-    TypeAdapter<?> adapter = gson.getAdapter(TypeToken.get(type));
-    return new GsonRequestBodyConverter<>(gson, adapter);
-  }
-}
-```
-
-##### 1、GsonResponseBodyConverter
-
-```java
-final class GsonResponseBodyConverter<T> implements Converter<ResponseBody, T> {
-  private final Gson gson;
-  private final TypeAdapter<T> adapter;
-
-  GsonResponseBodyConverter(Gson gson, TypeAdapter<T> adapter) {
-    this.gson = gson;
-    this.adapter = adapter;
-  }
-
-  @Override
-  public T convert(ResponseBody value) throws IOException {
-    JsonReader jsonReader = gson.newJsonReader(value.charStream());
-    try {
-      T result = adapter.read(jsonReader);
-      if (jsonReader.peek() != JsonToken.END_DOCUMENT) {
-        throw new JsonIOException("JSON document was not fully consumed.");
-      }
-      return result;
-    } finally {
-      value.close();
-    }
-  }
-}
-```
-
-##### 2、GsonRequestBodyConverter
-
-```java
-final class GsonRequestBodyConverter<T> implements Converter<T, RequestBody> {
-  private static final MediaType MEDIA_TYPE = MediaType.get("application/json; charset=UTF-8");
-  private static final Charset UTF_8 = Charset.forName("UTF-8");
-
-  private final Gson gson;
-  private final TypeAdapter<T> adapter;
-
-  GsonRequestBodyConverter(Gson gson, TypeAdapter<T> adapter) {
-    this.gson = gson;
-    this.adapter = adapter;
-  }
-
-  @Override
-  public RequestBody convert(T value) throws IOException {
-    Buffer buffer = new Buffer();
-    Writer writer = new OutputStreamWriter(buffer.outputStream(), UTF_8);
-    JsonWriter jsonWriter = gson.newJsonWriter(writer);
-    adapter.write(jsonWriter, value);
-    jsonWriter.close();
-    return RequestBody.create(MEDIA_TYPE, buffer.readByteString());
-  }
-}
-```
-
-## 5.3、请求适配器
-
-请求适配器CallAdapter.Factory，数据转换器涉及到2个类分别是CallAdapter 和 CallAdapter.Factory，
-
-```java
-public interface CallAdapter<R, T> {
-
-  Type responseType();
-
-  T adapt(Call<R> call);
-
-  abstract class Factory {
-
-    public abstract @Nullable CallAdapter<?, ?> get(
-        Type returnType, Annotation[] annotations, Retrofit retrofit);
-
-    protected static Type getParameterUpperBound(int index, ParameterizedType type) {
-      return Utils.getParameterUpperBound(index, type);
-    }
-
-    protected static Class<?> getRawType(Type type) {
-      return Utils.getRawType(type);
-    }
-  }
-}
-```
-
-
-
-# 六、整体框架
+## 7.1、整体框架
 
 ![image-20210125203006574](pics/image-20210125203006574.png)
 
+## 7.2、接口调用过程
+
+![image-20210220182532939](pics/image-20210220182532939.png)
+
+参考：
+
+https://segmentfault.com/a/1190000005638577
+
+https://yeungeek.github.io/2019/07/25/Network-Retrofit/#Retrofit%E4%B8%AD%E7%9A%84HTTP%E5%AE%9E%E7%8E%B0
+
+https://blog.csdn.net/carson_ho/article/details/73732076)
