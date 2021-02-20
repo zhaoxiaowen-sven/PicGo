@@ -177,46 +177,33 @@ public Retrofit build() {
 }
 ```
 
-## 3.1、回调执行器
+## 3.1、请求执行器
 
-Executor，用于回调网络请求的执行结果，Android中默认是通过创建一个主线程Handler将结果post出来，对于Retrofit的异步请求来说，回调结果是在主线程中的。
+负责真正发送请求，默认是okHttpClient
 
-```
-static final class Android extends Platform {
-  Android() {
-    super(Build.VERSION.SDK_INT >= 24);
-  }
-
-  @Override
-  public Executor defaultCallbackExecutor() {
-    return new MainThreadExecutor();
-  }
-
-  @Nullable
-  @Override
-  Object invokeDefaultMethod(
-      Method method, Class<?> declaringClass, Object object, Object... args) throws Throwable {
-    if (Build.VERSION.SDK_INT < 26) {
-      throw new UnsupportedOperationException(
-          "Calling default methods on API 24 and 25 is not supported");
-    }
-    return super.invokeDefaultMethod(method, declaringClass, object, args);
-  }
-
-  static final class MainThreadExecutor implements Executor {
-    private final Handler handler = new Handler(Looper.getMainLooper());
-
-    @Override
-    public void execute(Runnable r) {
-      handler.post(r);
-    }
-  }
-}
+```java
+ callFactory = new OkHttpClient();
 ```
 
-## 3.2、请求适配器
+## 3.2、数据转换器
 
-默认情况下使用的是DefaultCallAdapterFactory，**负责请求的执行以及回调结果**，内部封装了ExecutorCallbackCall。
+数据转换器可以将Response转换成我们需要的返回数据类型，默认添加的converterFactory如下：
+
+```java
+  List<Converter.Factory> converterFactories =
+      new ArrayList<>(
+          1 + this.converterFactories.size() + platform.defaultConverterFactoriesSize());
+
+  // Add the built-in converter factory first. This prevents overriding its behavior but also
+  // ensures correct behavior when using converters that consume all types.
+  converterFactories.add(new BuiltInConverters());
+  converterFactories.addAll(this.converterFactories);
+  converterFactories.addAll(platform.defaultConverterFactories());
+```
+
+## 3.3、请求适配器
+
+**负责请求的执行以及回调结果**，先介绍下默认的请求适配器DefaultCallAdapterFactory的原理。
 
 ```java
 final class DefaultCallAdapterFactory extends CallAdapter.Factory {
@@ -251,9 +238,9 @@ final class DefaultCallAdapterFactory extends CallAdapter.Factory {
   }
 ```
 
+33行：ExecutorCallbackCall，具体处理请求的执行以及callback回调。
 
-
-```
+```java
 static final class ExecutorCallbackCall<T> implements Call<T> {
   final Executor callbackExecutor;
   final Call<T> delegate;
@@ -298,74 +285,55 @@ static final class ExecutorCallbackCall<T> implements Call<T> {
 }
 ```
 
-## 3.3、数据转换器
+14行：异步请求的执行，执行的是传入call对象的enqueue方法；
 
-数据转换器可以将Response转换成我们需要的返回数据类型，默认添加的converterFactory如下：
+18行/31行：分别是请求成功和失败时，通过回调执行器进行回调；
 
-```java
-  List<Converter.Factory> converterFactories =
-      new ArrayList<>(
-          1 + this.converterFactories.size() + platform.defaultConverterFactoriesSize());
+38行：同步请求的执行，执行的是传入call对象的execute方法。
 
-  // Add the built-in converter factory first. This prevents overriding its behavior but also
-  // ensures correct behavior when using converters that consume all types.
-  converterFactories.add(new BuiltInConverters());
-  converterFactories.addAll(this.converterFactories);
-  converterFactories.addAll(platform.defaultConverterFactories());
-```
+## 3.4、回调执行器
 
-BuiltInConverters，当方法返回值类型type是ResponseBody时检查一下方法是否使用了@Streaming注解标识，否则会将数据全部读取到内存中，返回ResponseBody。
+Executor，用于回调网络请求的执行结果，Android中默认是通过创建一个主线程Handler将结果post出来，对于Retrofit的异步请求来说，回调结果是在主线程中的。
 
 ```java
-final class BuiltInConverters extends Converter.Factory {
-  /** Not volatile because we don't mind multiple threads discovering this. */
-  private boolean checkForKotlinUnit = true;
-
-  // 1、ResponseBody转换成数据对象
-  @Override
-  public @Nullable Converter<ResponseBody, ?> responseBodyConverter(
-      Type type, Annotation[] annotations, Retrofit retrofit) {
-    if (type == ResponseBody.class) {
-      return Utils.isAnnotationPresent(annotations, Streaming.class)
-          ? StreamingResponseBodyConverter.INSTANCE
-          : BufferingResponseBodyConverter.INSTANCE;
-    }
-    if (type == Void.class) {
-      return VoidResponseBodyConverter.INSTANCE;
-    }
-    if (checkForKotlinUnit) {
-      try {
-        if (type == Unit.class) {
-          return UnitResponseBodyConverter.INSTANCE;
-        }
-      } catch (NoClassDefFoundError ignored) {
-        checkForKotlinUnit = false;
-      }
-    }
-    return null;
+static final class Android extends Platform {
+  Android() {
+    super(Build.VERSION.SDK_INT >= 24);
   }
 
-  // 2、对象转换成RequestBody对象
   @Override
-  public @Nullable Converter<?, RequestBody> requestBodyConverter(
-      Type type,
-      Annotation[] parameterAnnotations,
-      Annotation[] methodAnnotations,
-      Retrofit retrofit) {
-    if (RequestBody.class.isAssignableFrom(Utils.getRawType(type))) {
-      return RequestBodyConverter.INSTANCE;
-    }
-    return null;
+  public Executor defaultCallbackExecutor() {
+    return new MainThreadExecutor();
   }
- // ...
- }
+
+  @Nullable
+  @Override
+  Object invokeDefaultMethod(
+      Method method, Class<?> declaringClass, Object object, Object... args) throws Throwable {
+    if (Build.VERSION.SDK_INT < 26) {
+      throw new UnsupportedOperationException(
+          "Calling default methods on API 24 and 25 is not supported");
+    }
+    return super.invokeDefaultMethod(method, declaringClass, object, args);
+  }
+
+  static final class MainThreadExecutor implements Executor {
+    // 主线程的Handler
+    private final Handler handler = new Handler(Looper.getMainLooper());
+	// 结果post到主线程
+    @Override
+    public void execute(Runnable r) {
+      handler.post(r);
+    }
+  }
+}
 ```
 
 # 四、接口创建过程
 
 ## 4.1、创建接口代理对象
 
-Retrofit.create，使用动态代理方式创建请求接口的代理对象，InvocationHandler 中定义了代理的规则，在调用到接口时，解析接口方法的注解参数，生成对应的ServiceMethod对象，并在调用到方法时，执行方法的参数。
+Retrofit.create，使用动态代理方式创建接口的代理对象，InvocationHandler中定义了代理的规则，在调用到接口时，解析接口方法的注解参数，生成对应的ServiceMethod对象，并在调用到方法时，执行方法的参数。
 
 ```java
 public <T> T create(final Class<T> service) {
@@ -396,7 +364,7 @@ public <T> T create(final Class<T> service) {
 }
 ```
 
-## 4.2、ServiceMethod创建
+## 4.2、创建ServiceMethod
 
 loadServiceMethod，根据方法的相关注解，生成对应的ServiceMethod对象。
 
@@ -438,8 +406,6 @@ private void validateServiceInterface(Class<?> service) {
 }
 ```
 
-## 4.3、ServiceMethod.parseAnnotations
-
 parseAnnotations 中主要的方法有2个，作用分别是解析方法注解（包含方法参数注解）以及生成对应的请求适配器和网络数据转换器。
 
 ```java
@@ -457,14 +423,14 @@ static <T> ServiceMethod<T> parseAnnotations(Retrofit retrofit, Method method) {
     if (returnType == void.class) {
       throw methodError(method, "Service methods cannot return void.");
     }
-    // 2、生成ServiceMethod对象，包含创建网络请求适配器和数据转换器
+    // 2、生成ServiceMethod对象
     return HttpServiceMethod.parseAnnotations(retrofit, method, requestFactory);
   }
 ```
 
-### 4.3.1、生成RequestFactory对象
+### 4.3.1、创建RequestFactory
 
-RequestFactory.parseAnnotations，通过解析方法注解和方法中的参数注解生成一个RequestFactory对象，**包含请求设定的参数**。我们先看一下RequestFactory中有哪些对象。
+RequestFactory，负责构造请求参数。通过解析方法注解和方法中的参数注解生成一个RequestFactory对象，**包含请求设定的参数**。我们先看一下RequestFactory中有哪些对象。
 
 ```java
 RequestFactory(Builder builder) {
@@ -694,9 +660,9 @@ else if (annotation instanceof QueryName) {
 
 通过以上源码可以清晰的看到，1、Query参数是支持集合和数组；2、Query参数默认的数据转换器StringConverter，将入参全部装换为String，以字符串的方式拼接到请求里。
 
-### 4.3.2、请求适配器 & 数据转化器 & 请求执行器
+### 4.3.2、创建HttpServiceMethod
 
-HttpServiceMethod.parseAnnotations 负责创建请求适配器 、数据转化器 、 请求执行器。
+HttpServiceMethod继承了ServiceMethod， parseAnnotations 负责创建请求适配器 、数据转化器 、 请求执行器。
 
 ```java
 static <ResponseT, ReturnT> HttpServiceMethod<ResponseT, ReturnT> parseAnnotations(
@@ -718,9 +684,7 @@ static <ResponseT, ReturnT> HttpServiceMethod<ResponseT, ReturnT> parseAnnotatio
 }
 ```
 
-#### 1、创建请求适配器
-
-createCallAdapter，默认情况下返回的是初始化时的**DefaultCallAdapterFactory**对象
+6行：createCallAdapter，默认情况下返回的是初始化时的**DefaultCallAdapterFactory**对象
 
 ```
 private static <ResponseT, ReturnT> CallAdapter<ResponseT, ReturnT> createCallAdapter(
@@ -734,9 +698,7 @@ private static <ResponseT, ReturnT> CallAdapter<ResponseT, ReturnT> createCallAd
 }
 ```
 
-#### 2、创建数据转换器
-
-创建数据解析器，默认情况下使用的是传入的BuiltInConverters。
+11行：创建数据解析器，默认情况下使用的是传入的BuiltInConverters。
 
 ```java
 private static <ResponseT> Converter<ResponseBody, ResponseT> createResponseConverter(
@@ -750,20 +712,25 @@ private static <ResponseT> Converter<ResponseBody, ResponseT> createResponseConv
 }
 ```
 
-#### 3、创建请求执行器
-
-经过以上几步，我们得到一个CallAdapted对象，CallAdapted.adapt会返回一个Call对象，用于执行请求。
+16行：经过以上几步，我们得到一个CallAdapted对象，CallAdapted继承自HttpServiceMethod，CallAdapted.adapt会返回一个Call对象，用于执行请求。
 
 ```java
 new CallAdapted<>(requestFactory, callFactory, responseConverter, callAdapter);
 ```
 
-接口执行时先调用到，经过动态代理invoke方法调用到**ServiceMethod.invoke()**，最终会调用到callAdapter.adapt方法。
+可以看到CallAdapted的构造方法中包含了所有请求过程的需要的对象。
+
+## 4.3、HttpServiceMethod.invoke
+
+动态代理方法执行时会调用到invoke()方法，看下HttpServiceMethod.invoke的具体实现：
 
 ```java
+/** Adapts an invocation of an interface method into an HTTP call. */
+abstract class HttpServiceMethod<ResponseT, ReturnT> extends ServiceMethod<ReturnT> {  
+  // 省略...
   @Override
   final @Nullable ReturnT invoke(Object[] args) {
-    // 传入OkHttpCall对象
+    // 1、传入OkHttpCall对象
     Call<ResponseT> call = new OkHttpCall<>(requestFactory, args, callFactory, responseConverter);
     return adapt(call, args);
   }
@@ -782,47 +749,14 @@ new CallAdapted<>(requestFactory, callFactory, responseConverter, callAdapter);
 
     @Override
     protected ReturnT adapt(Call<ResponseT> call, Object[] args) {
+      // 2、传入OkHttpCall对象
       return callAdapter.adapt(call);
     }
   }
-```
-
-结合DefaultCallAdapterFactory可知，默认会返回一个ExecutorCallbackCall的对象，该对象执行请求时使用的是传入的OkHttpCall。
-
-```java
-final class DefaultCallAdapterFactory extends CallAdapter.Factory {
-    // 省略
-    return new CallAdapter<Object, Call<?>>() {
-      @Override
-      public Type responseType() {
-        return responseType;
-      }
-
-      @Override
-      public Call<Object> adapt(Call<Object> call) {
-        // adapt方法中当executor == null，就返回传入的call对象，即之前新建的OkHttpCall实例对象。
-        return executor == null ? call : new ExecutorCallbackCall<>(executor, call);
-      }
-    };
-// ...    
-static final class ExecutorCallbackCall<T> implements Call<T> {
-    final Executor callbackExecutor;
-    final Call<T> delegate;
-
-    ExecutorCallbackCall(Executor callbackExecutor, Call<T> delegate) {
-      this.callbackExecutor = callbackExecutor;
-      this.delegate = delegate;
-    }
-    
-    @Override
-    public Response<T> execute() throws IOException {
-     // 同步请求执行
-      return delegate.execute();
-    }
-// ...
 }
-    
 ```
+
+7-8行：构造OkHttpCall对象，调用adapt方法，最终调用到第26行 callAdapter.adapt，传入的参数是OkHttpCall。这里的callAdapter默认是DefaultCallAdapterFactory，结合3.3节的内容，最终请求执行时调用的是OkHttpCall的方法。
 
 # 5、请求执行过程
 
