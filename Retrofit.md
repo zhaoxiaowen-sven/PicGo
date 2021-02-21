@@ -795,7 +795,7 @@ Response<T> parseResponse(okhttp3.Response rawResponse) throws IOException {
 
 # 六、重要对象解析
 
-## 5.1、请求适配器
+## 6.1、请求适配器
 
 请求适配器CallAdapter.Factory，数据转换器涉及到2个类分别是CallAdapter 和 CallAdapter.Factory，看下它的核心方法。
 
@@ -818,7 +818,7 @@ public interface CallAdapter<R, T> {
 }
 ```
 
-### 5.1.1、DefaultCallAdapterFactory
+### 6.1.1、DefaultCallAdapterFactory
 
 DefaultCallAdapterFactory是Retrofit默认添加的请求适配器，看下它的源码。
 
@@ -910,7 +910,7 @@ static final class ExecutorCallbackCall<T> implements Call<T> {
 
 总结下：**CallAdapter负责请求的执行以及回调结果，通过自定义CallAdapter可以方便处理回调结果。**Retrofit通常都是和RxJava组合使用，利用RxJavaXXXAdapter接口的返回结果改为 Observable对象，这里就不过多介绍了，网上资料很多。
 
-## 5.2、数据转换器
+## 6.2、数据转换器
 
 数据转换器涉及到2个类分别是Converter 和 Converter.Factory，Converter.Factory是converter的工厂类。常见的Converter如下：
 
@@ -952,7 +952,7 @@ public interface Converter<F, T> {
 
 也就是说一个Retrofit请求通常会有2个converter分别是**RequestBodyConverter**和**ResponseBodyConverter**，顾名思义，一个负责请求数据的转换，一个负责返回数据的转换。
 
-#### 5.2.1、RequestBodyConverter
+### 6.2.1、RequestBodyConverter
 
 先来看下RequestBodyConverter，RequestBodyConverter创建的地方是在解析方法注解生成ParameterHandler时，通过Retrofit.stringConverter生成。
 
@@ -989,7 +989,7 @@ static final class ToStringConverter implements Converter<Object, String> {
 }
 ```
 
-#### 5.2.2、ResponseBodyConverter
+### 6.2.2、ResponseBodyConverter
 
 ResponseBodyConverter，是在ServiceMethod解析注解过程中创建的（4.3.2），HttpServiceMethod.createResponseConverter经过一系列的调用，最终调用到的是nextResponseBodyConverter。
 
@@ -1012,7 +1012,7 @@ public <T> Converter<ResponseBody, T> nextResponseBodyConverter(
 
 7-12行：根据responseType匹配到对应的converter，这些converter在构造Retrofit时都初始化好了。
 
-#### 5.2.3、BuiltInConverters
+### 6.2.3、BuiltInConverters
 
 BuiltInConverters是Retrofit中默认提供的转换器，分析下源码：
 
@@ -1084,15 +1084,15 @@ final class BuiltInConverters extends Converter.Factory {
 
 如果是仅仅使用默认的Converter的话Retrofit2的使用将会受到极大的限制，可以通过自定义converter的方式来满足我们的不同数据转换需求，这也是Retrofit的核心功能之一。
 
-## 5.3、ParameterHandler详解
+## 6.3、ParameterHandler详解
 
-#### 5.3.1、介绍
+### 6.3.1、介绍
 
 ParameterHandler对象是在RequestFactory创建时生成的，参考4.3.1节；在请求Request对象创建过程中，使用ParameterHandler.apply 解析方法参数列表，不同的ParameterHandler负责对应类型参数的解析。主要的ParameterHandler类型有如下几种：
 
 ![image-20210119145830519](pics/image-20210119145830519.png)
 
-#### 5.3.2、分析
+### 6.3.2、分析
 
 ParameterHandler是一个抽象类，定义的抽象方法是：
 
