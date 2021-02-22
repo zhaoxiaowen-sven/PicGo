@@ -687,7 +687,7 @@ class CustomPlugin implements Plugin<Project> {
 
 1.建立buildSrc目录，创建目录$projectDir/buildSrc/src/main/groovy
 
-![image-20200311175320797](pics/image-20200311175320797.png)
+![image-20200311175320797](../pics/image-20200311175320797.png)
 
 2.创建groovy插件 CustomPlugin
 
@@ -739,7 +739,7 @@ dependencies {
 
 2.创建groovy工程目录并编写groovy文件
 
-![image-20200311195149055](pics/image-20200311195149055.png)
+![image-20200311195149055](../pics/image-20200311195149055.png)
 
 
 
@@ -784,7 +784,7 @@ uploadArchives {
 }
 ```
 
-![image-20200311195927306](pics\image-20200311195927306.png)
+![image-20200311195927306](..\../pics\image-20200311195927306.png)
 
 5.app/build.gradle中引用插件
 
@@ -819,7 +819,7 @@ Android Gradle 的插件主要有以下3种：
 
 一个buildVariant = BuildType * ProductFlavor，gradle 的task都是基于BuildType + ProductFlavor生成的。
 
-![image-20200328164456745](pics\image-20200328164456745.png)
+![image-20200328164456745](../pics\image-20200328164456745.png)
 
 ### 8.1 ProductFlavor 
 

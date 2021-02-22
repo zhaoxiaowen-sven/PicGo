@@ -6,7 +6,7 @@
 
 LruCache的核心算法是通过LinkedHashMap实现，注意要将LinkedHashMap的最后一个参数accessOrder设置为true，表示按照访问顺序排列，否则按照插入顺序排序。也就是说，**最近访问的元素排在Map的最后，当需要删除元素时，将会从头部开始删除**。正是这个特性，使得通过LinkedHashMap可以实现LRU算法。关于LinkedHashMap实现的LRU算法，下一篇分析。
 
-![image-20200512180836150](pics/image-20200512180836150.png)
+![image-20200512180836150](../../pics/image-20200512180836150.png)
 
 ## 二、LruCache的创建
 

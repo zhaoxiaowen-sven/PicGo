@@ -20,7 +20,7 @@ android应用在安装过程中会对apk进行签名校验，主要用于验证a
 
 ## 1.2、apk签名和验签原理
 
-![image-20201216113655542](pics/image-20201216113655542.png)
+![image-20201216113655542](../../pics/image-20201216113655542.png)
 
 ### 1.2.1、APK签名
 
@@ -42,7 +42,7 @@ V1签名又称为JAR签名，是对jar包进行签名的一种机制，由于jar
 
 ## 2.1 v1签名过程
 
-![image-20201221200634926](pics/image-20201221200634926.png)
+![image-20201221200634926](../../pics/image-20201221200634926.png)
 
 MANIFEST.MF、CERT.SF、CERT.RSA是签名过程中生成的文件（[apksigner源码](https://android.googlesource.com/platform/build/+/7e447ed/tools/signapk/SignApk.java)），作用如下：
 
@@ -82,7 +82,7 @@ SHA1-Digest: mYQig54fsd3pTRQTmTwMD2oO5CM= //MANIFEST.MF 各个条目的摘要
 
 **对CERT.SF 文件的摘要通过私钥加密生成校验串**, 然后和**数字签名、公钥、数字证书**一同写入 CERT.RSA 中保存。很多文章将校验串描述成签名，这样的理解是不准确的。可以比较2个同一个公司出品的apk的RSA文件，你会发现可能除了结尾部分不太一样外，其他部分基本相同，原因其实就是同一个公司出品的apk，它的签名，证书，公钥通常都是相同的，只有通过私钥加密的CERT.SF的摘要不同。 如下图：
 
-![image-20201217160514944](pics/image-20201217160514944.png)
+![image-20201217160514944](../../pics/image-20201217160514944.png)
 
 #### 1、查看证书与公钥
 
@@ -104,7 +104,7 @@ keytool -list -rfc --keystore test.jks | openssl x509 -inform pem -pubkey
 2. 使用签名文件对apk进行签名；
 3. 通过相关命令查看.jks文件以及解压apk中的.rsa 文件。
 
-![image-20201217162850396](pics/image-20201217162850396.png)
+![image-20201217162850396](../../pics/image-20201217162850396.png)
 
 #### 2、查看签名
 
@@ -119,7 +119,7 @@ keytool -printcert -file xxx.RSA
 
 **证书信息：**
 
-![image-20201217163225037](pics/image-20201217163225037.png)
+![image-20201217163225037](../../pics/image-20201217163225037.png)
 
 ## 2.2、[v1验签过程](https://android.googlesource.com/platform/frameworks/base/+/android-5.1.1_r38/services/core/java/com/android/server/pm/PackageManagerService.java)
 
@@ -157,7 +157,7 @@ keytool -printcert -file xxx.RSA
 
 我们先来了解下v1签名文件的apk结构，也就是zip文件的结构。
 
-![image-20201217175101791](pics/image-20201217175101791.png)
+![image-20201217175101791](../../pics/image-20201217175101791.png)
 
 
 
@@ -183,13 +183,13 @@ JAR签名是在apk文件中添加META-INF目录，即需要修改数据区、中
 
 v2方案为加强数据完整性保证，不在数据区和中央目录中插入数据，选择在 数据区和中央目录之间插入一个APK签名分块，从而保证了原始数据的完整性。
 
-![image-20201217174414400](pics/image-20201217174414400.png)
+![image-20201217174414400](../../pics/image-20201217174414400.png)
 
 APK 签名方案 v2 负责保护第 1、3、4 部分的完整性，以及第 2 部分包含的“APK 签名方案 v2 分块”中的 `signed data` 分块的完整性。第 1、3 和 4 部分的完整性通过其内容的一个或多个摘要来保护，这些摘要存储在 `signed data` 分块中，而这些分块则通过一个或多个签名来保护。
 
 ### 2.2.1、APK摘要计算
 
-![image-20201217202801891](pics/image-20201217202801891.png)
+![image-20201217202801891](../../pics/image-20201217202801891.png)
 
 第 1、3 和 4 部分的摘要采用以下计算方式：
 
@@ -205,13 +205,13 @@ APK 签名方案 v2 负责保护第 1、3、4 部分的完整性，以及第 2 �
 
 APK签名分块包含了4部分：分块长度、ID-VALUE序列、分块长度、固定magic值。其中APK 签名方案 **v2分块**存放在ID为**0x7109871a**的ID-VALUE区中。
 
-![image-20201217212653708](pics/image-20201217212653708.png)
+![image-20201217212653708](../../pics/image-20201217212653708.png)
 
 ### 2.3.2、v2 Block
 
 v2分块主要由签名数据，数字签名以及公钥组成，具体结构如下。
 
-![image-20201219104001970](pics/image-20201219104001970.png)
+![image-20201219104001970](../../pics/image-20201219104001970.png)
 
 ### 2.3.3、签名过程
 
@@ -223,7 +223,7 @@ V2签名块的生成可参考[ApkSignerV2](https://android.googlesource.com/plat
 4. 把第二列的`类似MF文件`、`类似SF文件`和`开发者公钥`一起组装成通过单个keystore签名后的v2签名块（第三列第一行）。
 5. 把多个keystore签名后的签名块组装起来，就是完整的V2签名块了（Android中允许使用多个keystore对apk进行签名）。
 
-![image-20201219153651713](pics/image-20201219153651713.png)
+![image-20201219153651713](../../pics/image-20201219153651713.png)
 
 
 
@@ -231,7 +231,7 @@ V2签名块的生成可参考[ApkSignerV2](https://android.googlesource.com/plat
 
 在 Android 7.0 及更高版本中，可以根据 APK 签名方案 v2+ 或 JAR 签名（v1 方案）验证 APK。更低版本的平台会忽略 v2 签名，仅验证 v1 签名。
 
-![image-20201221204054757](pics/image-20201221204054757.png)
+![image-20201221204054757](../../pics/image-20201221204054757.png)
 
 ### 2.4.1、v2 验证过程
 
@@ -270,7 +270,7 @@ V2签名块的生成可参考[ApkSignerV2](https://android.googlesource.com/plat
 
 v3和v2一样签名块存储在中央目录区之前，v3 签名会存储的ID为**0xf05368c0**，新增了 ID为**0x3ba06f8c** 的proof-of-rotation 结构中用来支持应用替换签名证书。在 Android 9 及更高版本中，可以根据 APK 签名方案 v3、v2 或 v1 验证 APK。较旧的平台会忽略 v3 签名而尝试验证 v2 签名，然后尝试验证 v1 签名。
 
-![image-20201222203051481](pics/image-20201222203051481.png)
+![image-20201222203051481](../../pics/image-20201222203051481.png)
 
 
 
@@ -302,13 +302,13 @@ Gradle Plugin为我们提供了一个自动化的方案，我们可以利用占�
 2. 中央目录信息（起始位置，记录数，长度）
 3. 注释区长度n（前2个字节）以及注释内容（Comment）
 
-![image-20201219155013207](pics/image-20201219155013207.png)
+![image-20201219155013207](../../pics/image-20201219155013207.png)
 
 ### 5.1.2、v1方案
 
 根据之前的V1签名和校验机制可知，v1签名只会检验第一部分的所有压缩文件，而不理会后两部分内容。因此，我们可以向注释区中写入渠道。写入过程如下：
 
-![image-20201222201238671](pics/image-20201222201238671.png)
+![image-20201222201238671](../../pics/image-20201222201238671.png)
 
 这里添加魔数的好处是方便从后向前读取数据，定位渠道信息。因此，读取渠道信息包括以下几步：
 
@@ -337,7 +337,7 @@ v3和v2的方案基本相同，但是v3签名**限制了签名块大小是4096�
 
 [generateApkSigningBlock](https://android.googlesource.com/platform/tools/apksig/+/master/src/main/java/com/android/apksig/internal/apk/ApkSigningBlockUtils.java)
 
-![image-20201222211918992](pics/image-20201222211918992.png)
+![image-20201222211918992](../../pics/image-20201222211918992.png)
 
 # 参考
 

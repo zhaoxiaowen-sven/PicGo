@@ -916,7 +916,7 @@ static final class ExecutorCallbackCall<T> implements Call<T> {
 
 数据转换器涉及到2个类分别是Converter 和 Converter.Factory，Converter.Factory是converter的工厂类。常见的Converter如下：
 
-![image-20210119151956195](pics/image-20210119151956195.png)
+![image-20210119151956195](../../pics/image-20210119151956195.png)
 
 Converter.Factory 中定义了这2种转换方式的接口：
 
@@ -1092,7 +1092,7 @@ final class BuiltInConverters extends Converter.Factory {
 
 ParameterHandler对象是在RequestFactory创建时生成的，参考4.3.1节；在请求Request对象创建过程中，使用ParameterHandler.apply 解析方法参数列表，不同的ParameterHandler负责对应类型参数的解析。主要的ParameterHandler类型有如下几种：
 
-![image-20210119145830519](pics/image-20210119145830519.png)
+![image-20210119145830519](../../pics/image-20210119145830519.png)
 
 ### 6.3.2、分析
 
@@ -1170,11 +1170,11 @@ abstract class ParameterHandler<T> {
 
 ## 7.1、整体框架
 
-![image-20210125203006574](pics/image-20210125203006574.png)
+![image-20210125203006574](../../pics/image-20210125203006574.png)
 
 ## 7.2、接口调用过程
 
-![image-20210220182532939](pics/image-20210220182532939.png)
+![image-20210220182532939](../../pics/image-20210220182532939.png)
 
 参考：
 
