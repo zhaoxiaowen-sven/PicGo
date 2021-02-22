@@ -1,5 +1,7 @@
 # Retrofit源码解析
 
+[TOC]
+
 # 一、基本用法
 
 ## 1.1、gradle依赖
@@ -186,7 +188,7 @@ public Retrofit build() {
   callAdapterFactories.addAll(platform.defaultCallAdapterFactories(callbackExecutor));
 ```
 
-## 3.2、数据转换器
+## 3.3、数据转换器
 
 Converter用于构建数据转换器，主要有2个作用：1、将Response转换成我们需要的返回数据类型；2、将输入的请求参数转换为ResquestBody或String。默认添加的converterFactory如下，关于数据转换器的详细说明，后面再介绍：
 
