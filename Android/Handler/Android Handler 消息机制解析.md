@@ -1,4 +1,7 @@
+
+
 ## 一、从 Handler.sendMessage 说起：
+
 Android UI是线程不安全的，如果在子线程中尝试进行UI操作，程序就有可能会崩溃。要处理这样的问题就需要通过handler的异步消息处理机制了，通常有2种写法：
 1.sendMessage
 
