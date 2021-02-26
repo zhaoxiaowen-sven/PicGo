@@ -1,3 +1,5 @@
+
+
 # Handler消息机制
 
 Handler是Android中一种线程间传递消息的机制。主要应用的场景，将子线程中待更新的UI信息传递到主线程。本文将从以下几个方面介绍Handler：
@@ -145,71 +147,73 @@ private boolean enqueueMessage(@NonNull MessageQueue queue, @NonNull Message msg
 
 经过一系列的调用sendMessageAtTime最终调用到了MessagQueue.enqueueMessage。
 
-enqueueMessage将所有收到的消息按发送时间进行排序，加入到MessageQueue（消息队列）中，MessageQueue是怎么来的后面再讲。
+enqueueMessage将所有收到的消息按发送时间进行排序，加入到MessageQueue（消息队列）中，MessageQueue更多的细节后面再讲。
 
 ```java
 boolean enqueueMessage(Message msg, long when) {
         if (msg.target == null) {
             throw new IllegalArgumentException("Message must have a target.");
         }
-
-        synchronized (this) {
-            if (msg.isInUse()) {
-                throw new IllegalStateException(msg + " This message is already in use.");
-            }
-
-            if (mQuitting) {
-                IllegalStateException e = new IllegalStateException(
-                        msg.target + " sending message to a Handler on a dead thread");
-                Log.w(TAG, e.getMessage(), e);
-                msg.recycle();
-                return false;
-            }
-
-            msg.markInUse();
-            msg.when = when;
-            //1、拿到队列头部消息
-            Message p = mMessages;
-            boolean needWake;
-            //2、如果消息不需要延时，或者消息的执行时间比头部消息早，插到队列头部
-            if (p == null || when == 0 || when < p.when) {
-                // New head, wake up the event queue if blocked.
-                msg.next = p;
-                mMessages = msg;
-                needWake = mBlocked;
-            } else {
-                // Inserted within the middle of the queue.  Usually we don't have to wake
-                // up the event queue unless there is a barrier at the head of the queue
-                // and the message is the earliest asynchronous message in the queue.
-                needWake = mBlocked && p.target == null && msg.isAsynchronous();
-                Message prev;
-                // 3、根据时间，将消息插到队列中合适的位置
-                for (;;) {
-                    prev = p;
-                    p = p.next;
-                    if (p == null || when < p.when) {
-                        break;
-                    }
-                    if (needWake && p.isAsynchronous()) {
-                        needWake = false;
-                    }
-                }
-                msg.next = p; // invariant: p == prev.next
-                prev.next = msg;
-            }
-
-            // We can assume mPtr != 0 because mQuitting is false.
-            if (needWake) {
-                nativeWake(mPtr);
-            }
+  synchronized (this) {
+        if (msg.isInUse()) {
+            throw new IllegalStateException(msg + " This message is already in use.");
         }
-        return true;
+
+        if (mQuitting) {
+            IllegalStateException e = new IllegalStateException(
+                    msg.target + " sending message to a Handler on a dead thread");
+            Log.w(TAG, e.getMessage(), e);
+            msg.recycle();
+            return false;
+        }
+
+        msg.markInUse();
+        msg.when = when;
+        //1、拿到队列头部消息
+        Message p = mMessages;
+        boolean needWake;
+        //2、如果消息不需要延时，或者消息的执行时间比头部消息早，插到队列头部
+        if (p == null || when == 0 || when < p.when) {
+            // New head, wake up the event queue if blocked.
+            msg.next = p;
+            mMessages = msg;
+            needWake = mBlocked;
+        } else {
+            // Inserted within the middle of the queue.  Usually we don't have to wake
+            // up the event queue unless there is a barrier at the head of the queue
+            // and the message is the earliest asynchronous message in the queue.
+            needWake = mBlocked && p.target == null && msg.isAsynchronous();
+            Message prev;
+            // 3、根据时间，将消息插到队列中合适的位置
+            for (;;) {
+                prev = p;
+                p = p.next;
+                if (p == null || when < p.when) {
+                    break;
+                }
+                if (needWake && p.isAsynchronous()) {
+                    needWake = false;
+                }
+            }
+            msg.next = p; // invariant: p == prev.next
+            prev.next = msg;
+        }
+
+        // We can assume mPtr != 0 because mQuitting is false.
+        // 4、唤醒机制
+        if (needWake) {
+            nativeWake(mPtr);
+        }
     }
+    return true;
+}
 ```
 
 22 - 24行：对收到的消息按发送时间进行排序，如果当前消息不需要延时，放到头部；若是延时消息，则根据发送时间放到队列合适位置。
 
-至此，消息的发送过程全部结束了。什么！那消息是怎么分发的呢？我们先给出答案，是通过Looper.loop。
+总结一下：**sendMessage就是讲消息加到MessageQueue的队列中**。
+
+至此，消息的发送过程全部结束了，什么！那消息是怎么分发的呢？我们先给出答案，是通过Looper.loop。
 
 ## 1.3、消息出队
 
@@ -256,15 +260,34 @@ boolean enqueueMessage(Message msg, long when) {
 
 19行：消息分发msg.target的dispatchMessage()方法中，那这里msg.target又是什么呢？其实就是handler，回头看下enqueueMessage。
 
+```java
+/**
+ * Handle system messages here.
+ */
+public void dispatchMessage(@NonNull Message msg) {
+    if (msg.callback != null) {
+        handleCallback(msg);
+    } else {
+        if (mCallback != null) {
+            if (mCallback.handleMessage(msg)) {
+                return;
+            }
+        }
+        handleMessage(msg);
+    }
+}
+```
+
 28行：消息回收过程，这里涉及到Message的回收和复用，后面再讲。
 
-**总结一下：Handler通过sendMessage将消息加入到消息队列中，最后在通过Looper.loop从消息队列中逐个取出消息执行。**原理如下图所示：
+**总结一下：Handler通过sendMessage将消息加入到消息队列中，最后在通过Looper.loop从消息队列中逐个取出消息执行。**整体原理如下图所示：
 
 ![image-20210226151751578](../../pics/image-20210226151751578.png)
 
-好了，Handler的消息分发机制就介绍完了。就这？当然不！上述介绍过程中涉及到几个概念Loope，MessageQueue，还没说呢？我们先来看下Handler涉及到的几个概念。
+好了，Handler的消息分发机制就介绍完了。如果只是想简单了解下Handler机制，到这里就可以了。
 
-- Handle 消息机制中作为一个对外暴露的工具，其内部包含了一个 Looper 。负责Message的发送及处理。Handler.sendMessage() ：向消息队列发送各种消息事件；Handler.handleMessage()：处理相应的消息事件
+就这？当然不！上述介绍过程中涉及到几个概念Looper，MessageQueue，还没详细说呢？我们先来看下Handler涉及到的几个概念。
+
 - Looper 作为消息循环的核心，其内部包含了一个消息队列 MessageQueue ，用于记录所有待处理的消息；通过Looper.loop()不断地从MessageQueue中抽取Message，按分发机制将消息分发给目标处理者，可以看成是消息泵。注意，线程切换就是在这一步完成的。
 - MessageQueue 则作为一个消息队列，则包含了一系列链接在一起的 Message ；不要被这个Queue的名字给迷惑了，就以为它是一个队列，但其实内部通过单链表的数据结构来维护消息列表，等待Looper的抽取。
 - Message 则是消息体，内部又包含了一个目标处理器 target ，这个 target 正是最终处理它的 Handler。
@@ -348,13 +371,15 @@ public static void main(String[] args) {
         Looper.myLooper().setMessageLogging(new
                 LogPrinter(Log.DEBUG, "ActivityThread"));
     }
-    // 2、looper.loop
+    // 2、看这里looper.loop
     Looper.loop();
     //省略...
 }
 ```
 
-第3行:调用了 Looper.prepareMainLooper()，再调用到Looper的prepare。
+3行:调用了 Looper.prepareMainLooper()，再调用到Looper的prepare。
+
+14行：Looper.looper，开启循环，不停取出消息。
 
 ```java
 /**
@@ -433,9 +458,7 @@ ThreadLocal.ThreadLocalMap threadLocals = null;
 
 2. 将value值存到ThreadMap中，key是当前threadLocal对象，也就是说一个Thread可以存多个不同ThreadLocal的值，一个ThreadLocal只能存一个值。
 
-**总结一下：Looper通过prepare会初始化一个Looper对象，通过ThreadLocal将Thread和Looper对象绑定在一起。**
-
-我们再理解下Looper.myLooper对应的get过程，先获取线程的threadLocals（ThreadMap对象），再通过get（当前ThreadLocal对象）获取到。
+我们再理解下Looper.myLooper对应的get过程，先获取线程的threadLocals（ThreadMap对象），再通过get（key是当前ThreadLocal对象）获取到looper。
 
 ```java
 public static @Nullable Looper myLooper() {
@@ -462,6 +485,8 @@ class ThreadLocal<T> {
 }
 ```
 
+**总结一下：Looper通过prepare会初始化一个Looper对象，通过ThreadLocal将Thread和Looper对象绑定在一起。Looper.loop会从MessageQueue中不断取出消息，进行分发。**
+
 ## 2.3、异步消息处理线程
 
 标准的子线程中异步消息分发机制
@@ -484,26 +509,220 @@ class ThreadLocal<T> {
 
 Looper相关的介绍就到此为止，下面来细细分析下MessageQueue。
 
-## 三、MessageQueue
+# 三、MessageQueue
 
-在Looper的介绍中，我们提到了MessageQueue
+MessagQueue，顾名思义，消息队列，在Looper的介绍中，我们提到了MessageQueue其实是在Looper构造创建生成的，Handler中的mQueue其实就是Looper.mQueue，Looper和MessageQueue是一一对应的。
 
+```java
+public Handler(@Nullable Callback callback, boolean async) {
+    mLooper = Looper.myLooper();
+    if (mLooper == null) {
+        throw new RuntimeException(
+            "Can't create handler inside thread " + Thread.currentThread()
+                    + " that has not called Looper.prepare()");
+    }
+    // 看这里
+    mQueue = mLooper.mQueue;
+    mCallback = callback;
+    mAsynchronous = async;
+}
+```
 
+在前面章节我们讲了sengMessage最终会调用到MessageQueue.enqueueMessage，下面具体分析enqueueMessage的代码。
 
-## 四、Message 和 享元模式
+## 3.1、enqueueMessage
+
+关于enqueueMessage消息入队逻辑在1.2节已经介绍过了；除此之外，消息加入队列时，两种情况会唤醒looper.loop，为什么要唤醒，后面再说：
+
+1. （队列为空，消息无需延时或消息执行时间比队列头部消息早) && (线程处于挂起状态时（mBlocked = true）)
+2. 【线程挂起（mBlocked = true）&& 消息循环处于同步屏障状态】，这时如果插入的是一个异步消息，则需要唤醒。
+
+```java
+  boolean enqueueMessage(Message msg, long when) {
+           
+            boolean needWake;
+           //1、队列为空，消息无需延时或消息执行时间比队列头部消息早) && (线程处于挂起状态时（mBlocked = true）)
+            if (p == null || when == 0 || when < p.when) {
+                // New head, wake up the event queue if blocked.
+                msg.next = p;
+                mMessages = msg;
+                needWake = mBlocked;
+            } else {
+                // Inserted within the middle of the queue.  Usually we don't have to wake
+                // up the event queue unless there is a barrier at the head of the queue
+                // and the message is the earliest asynchronous message in the queue.
+                // 2、线程挂起（mBlocked = true）&& 消息循环处于同步屏障状态】，这时如果插入的是一个异步消息，则需要唤醒。
+                needWake = mBlocked && p.target == null && msg.isAsynchronous();
+                Message prev;
+                for (;;) {
+                    prev = p;
+                    p = p.next;
+                    if (p == null || when < p.when) {
+                        break;
+                    }
+                    if (needWake && p.isAsynchronous()) {
+                        needWake = false;
+                    }
+                }
+                msg.next = p; // invariant: p == prev.next
+                prev.next = msg;
+            }
+
+            // We can assume mPtr != 0 because mQuitting is false.
+            if (needWake) {
+                nativeWake(mPtr);
+            }
+        }
+        return true;
+    }
+```
+
+## 3.2、next
+
+在1.3节我们介绍过Looper.Looper负责消息出队，通过Queue.next()取队列中的消息。
+
+```java
+Message next() {    
+    // Return here if the message loop has already quit and been disposed.
+    // This can happen if the application tries to restart a looper after quit
+    // which is not supported.
+    // 1、通过Looper.quit调用到Message.quit后会执行到这里
+    final long ptr = mPtr;
+    if (ptr == 0) {
+        return null;
+    }
+
+    int pendingIdleHandlerCount = -1; // -1 only during first iteration
+    int nextPollTimeoutMillis = 0;
+    for (;;) {
+        if (nextPollTimeoutMillis != 0) {
+            Binder.flushPendingCommands();
+        }
+        // 2、nextPollTimeoutMillis = -1 阻塞
+        nativePollOnce(ptr, nextPollTimeoutMillis);
+
+        synchronized (this) {
+            // Try to retrieve the next message.  Return if found.
+            final long now = SystemClock.uptimeMillis();
+            Message prevMsg = null;
+            Message msg = mMessages;
+            if (msg != null && msg.target == null) {
+                // 3、屏障消息
+                // Stalled by a barrier.  Find the next asynchronous message in the queue.
+                do {
+                    prevMsg = msg;
+                    msg = msg.next;
+                } while (msg != null && !msg.isAsynchronous());
+            }
+            if (msg != null) {
+                if (now < msg.when) {
+                    // 4、时间没到，设定下次唤醒的时间
+                    // Next message is not ready.  Set a timeout to wake up when it is ready.
+                    nextPollTimeoutMillis = (int) Math.min(msg.when - now, Integer.MAX_VALUE);
+                } else {
+                    // Got a message.
+                    mBlocked = false;
+                    if (prevMsg != null) {
+                        prevMsg.next = msg.next;
+                    } else {
+                        mMessages = msg.next;
+                    }
+                    msg.next = null;
+                    if (DEBUG) Log.v(TAG, "Returning message: " + msg);
+                    msg.markInUse();
+                    return msg;
+                }
+            } else {
+                // No more messages.
+                nextPollTimeoutMillis = -1;
+            }
+
+            // Process the quit message now that all pending messages have been handled.
+            if (mQuitting) {
+                dispose();
+                return null;
+            }
+           // If first time idle, then get the number of idlers to run.
+           // Idle handles only run if the queue is empty or if the first message
+           // in the queue (possibly a barrier) is due to be handled in the future.
+          	// 第一次执行时，确定IdleHandler的数目
+           if (pendingIdleHandlerCount < 0
+                   && (mMessages == null || now < mMessages.when)) {
+               pendingIdleHandlerCount = mIdleHandlers.size();
+           }
+           if (pendingIdleHandlerCount <= 0) {
+               // No idle handlers to run.  Loop and wait some more.
+               mBlocked = true;
+               continue;
+           }
+
+           if (mPendingIdleHandlers == null) {
+               mPendingIdleHandlers = new IdleHandler[Math.max(pendingIdleHandlerCount, 4)];
+           }
+           mPendingIdleHandlers = mIdleHandlers.toArray(mPendingIdleHandlers);
+        }
+
+        // Run the idle handlers.
+        // We only ever reach this code block during the first iteration.
+        // 遍历执行idleHandler
+        for (int i = 0; i < pendingIdleHandlerCount; i++) {
+            final IdleHandler idler = mPendingIdleHandlers[i];
+            mPendingIdleHandlers[i] = null; // release the reference to the handler
+
+            boolean keep = false;
+            try {
+                keep = idler.queueIdle();
+            } catch (Throwable t) {
+                Log.wtf(TAG, "IdleHandler threw exception", t);
+            }
+
+            if (!keep) {
+                synchronized (this) {
+                    // 非keep的执行完后移除掉
+                    mIdleHandlers.remove(idler);
+                }
+            }
+        }
+
+        // Reset the idle handler count to 0 so we do not run them again.
+        // idleHandler
+        pendingIdleHandlerCount = 0;
+        
+        // While calling an idle handler, a new message could have been delivered
+        // so go back and look again for a pending message without waiting.
+        nextPollTimeoutMillis = 0;
+    }
+}
+```
+
+主要的步骤：
+
+1. 判断MessageQueue是不是退出了，如果退出，整个Looper.loop都退出，通常是通过调用Looper.quit退出。
+
+2. nativePollOnce，我们知道Looper.looper是一个死循环，如果没有消息，还会继续执行吗？显然不可能，在消息队列为空的时候，Looper实际上处于休眠状态，当nextPollTimeoutMillis =-1 时阻塞，CPU进入休眠；对于deleyMessage，nextPollTimeoutMillis>0，时间到了后唤醒。Message Queue共有2种情况唤醒：1.加入消息新消息时唤醒（上一节介绍过） ；2.delayMsg时间到了唤醒。
+
+   那么是怎么实现的呢？这里涉及到linux的epoll机制，handler这里就不展开讲了，参考（https://mp.weixin.qq.com/s/H8mHoYHyTe6oOaUwfYh6_g）。
+
+3. 屏障消息和idleHandler相关，后面介绍。
+
+**总结一下：MessageQueue负责消息的存取，Looper的looper并不会一直执行，当nativePollOnce的参数nextPollTimeoutMillis=-1时会休眠，唤醒有2种方式一种是队列有新消息入队时；另一种是delayMsg时刻到了。**
+
+#  四、Message和享元模式
+
+Message对象都有一个同类型的next字段，这个next字段指向的就是下一个可用的Message，最后一个可用的Message字段的next为空，组成Message链表，sPool 永远指向的是整个链表的第一个元素。
 
 通常我们获取一个Message都是通过Message的obtain方法：
 
-   public final class Message implements Parcelable {
+```java
+public final class Message implements Parcelable {
     ...
     // sometimes we store linked lists of these things
     /*package*/ Message next;
-
     private static final Object sPoolSync = new Object();
     private static Message sPool;
     private static int sPoolSize = 0;
     private static final int MAX_POOL_SIZE = 50;
-    
+
     /**
       * Return a new Message instance from the global pool. Allows us to
       * avoid allocating new objects in many cases.
@@ -522,101 +741,111 @@ Looper相关的介绍就到此为止，下面来细细分析下MessageQueue。
         return new Message();
     }
     ...
-  }
-每一个Message对象都有一个同类型的next字段，这个next字段指向的就是下一个可用的Message，最后一个可用的Message字段的next为空，这样所有的Message对象就通过next串联成一个Message池了，而sPool 永远指向的是整个链表的第一个元素。
-13 - 18行，当使用obtain方法获取一个Message对象时，其实获取的就是链表中的第一个元素，同时将sPool在指向下一个Message。
-那么这些Message对象是在什么时候被放到链表中的呢，在Message类的说明中有这样一句话： While the constructor of Message is public, the best way to getone of these is to call {@link #obtain Message.obtain()} or one of the methods, which will pull them from a pool of recycled objects。原来在创建Message时不会将Message放入队列而是在recycle时才会加入到队列，让我们先来看下recylce方法：
+}
+```
+17 - 18行，当使用obtain方法获取一个Message对象时，其实获取的就是链表中的第一个元素，同时将sPool在指向下一个Message。
 
-     /**
-     * Return a Message instance to the global pool.
-     * <p>
-     * You MUST NOT touch the Message after calling this function because it has
-     * effectively been freed.  It is an error to recycle a message that is currently
-     * enqueued or that is in the process of being delivered to a Handler.
-     * </p>
-     */
-    public void recycle() {
-        if (isInUse()) {
-            if (gCheckRecycle) {
-                throw new IllegalStateException("This message cannot be recycled because it "
-                        + "is still in use.");
-            }
-            return;
-        }
-        recycleUnchecked();
-    }
-    
-    /**
-     * Recycles a Message that may be in-use.
-     * Used internally by the MessageQueue and Looper when disposing of queued Messages.
-     */
-    void recycleUnchecked() {
-        // Mark the message as in use while it remains in the recycled object pool.
-        // Clear out all other details.
-        flags = FLAG_IN_USE;
-        what = 0;
-        arg1 = 0;
-        arg2 = 0;
-        obj = null;
-        replyTo = null;
-        sendingUid = -1;
-        when = 0;
-        target = null;
-        callback = null;
-        data = null;
-    
-        synchronized (sPoolSync) {
-            if (sPoolSize < MAX_POOL_SIZE) {
-                next = sPool;
-                sPool = this;
-                sPoolSize++;
-            }
-        }
-    }
+那么这些Message对象是在什么时候被放到链表中的呢，在Message类的说明中有这样一句话：
 
-10 - 17行，判断Message是否在被使用中，如果没有，则执行回收操作。
-27 - 43行，先清空Message的各字段，并将flag置为FLAG_IN_USE，这个flag在obtain时会被置为0。然后继续判断是否要将该消息放到回收池中，如果池的大小小于MAX_POOL_SIZE（50），那么就进行链表操作，将这个Message放到链表的表头。
+```
+ While the constructor of Message is public, the best way to getone of these is to call {@link #obtain Message.obtain()} or one of the methods, which will pull them from a pool of recycled objects。
+```
+
+原来在创建Message时不会将Message放入队列而是在recycle时才会加入到队列，让我们先来看下recylce方法：
+
+```java
+public void recycle() {
+    if (isInUse()) {
+        if (gCheckRecycle) {
+            throw new IllegalStateException("This message cannot be recycled because it "
+                    + "is still in use.");
+        }
+        return;
+    }
+    recycleUnchecked();
+}
+
+/**
+ * Recycles a Message that may be in-use.
+ * Used internally by the MessageQueue and Looper when disposing of queued Messages.
+ */
+void recycleUnchecked() {
+    // Mark the message as in use while it remains in the recycled object pool.
+    // Clear out all other details.
+    flags = FLAG_IN_USE;
+    what = 0;
+    arg1 = 0;
+    arg2 = 0;
+    obj = null;
+    replyTo = null;
+    sendingUid = -1;
+    when = 0;
+    target = null;
+    callback = null;
+    data = null;
+
+    synchronized (sPoolSync) {
+        if (sPoolSize < MAX_POOL_SIZE) {
+            next = sPool;
+            sPool = this;
+            sPoolSize++;
+        }
+    }
+}
+```
+
+12- 8行：判断Message是否在被使用中，如果没有，则执行回收操作。
+
+19-35行：回收先清空Message的各字段，并将flag置为FLAG_IN_USE，这个flag在obtain时会被置为0。然后继续判断是否要将该消息放17到回收池中，如果池的大小小于MAX_POOL_SIZE（50），那么就进行链表操作，将这个Message放到链表的表头。
 
 总结一下：Message 通过在内部构建一个链表维护一个被回收的Message对象的对象池，当用户调用obtain函数时优先从池中获取，如果池中没有可以复用的对象则创建一个新的Message对象。这些新创建的Message对象再被使用完之后会被回收到这个对象池中，当下次再调用obtain函数时，他们就会被复用。
-Message对象没有内部外部的状态区别，更像是一个对象池。结合的Looper.loop方法，在使用完一个Message对象后就将会将它回收，避免系统中创建太多Message对象。
+结合的Looper.loop方法，在使用完一个Message对象后就将会将它回收，避免系统中创建太多Message对象。
 
-## 六、子线程中更新UI的
+# 五、屏障消息和异步消息
+
+# 六、IdleHandler
+
+# 七、子线程中更新UI的方法
+
 除了Handler的sendMessage和post之外，我们还有以下2种方法可以在子线程中进行UI操作，一句话解释完，请看注释！！！
-    
-1. View的post()方法
+## 7.1、View的post()方法
 
-        /**
-         * <p>Causes the Runnable to be added to the message queue.
-         * The runnable will be run on the user interface thread.</p>
-         */
-        public boolean post(Runnable action) {
-            final AttachInfo attachInfo = mAttachInfo;
-            if (attachInfo != null) {
-                return attachInfo.mHandler.post(action);
-            }
-        
-            // Postpone the runnable until we know on which thread it needs to run.
-            // Assume that the runnable will be successfully placed after attach.
-            getRunQueue().post(action);
-            return true;
-        }
+```java
+/**
+ * <p>Causes the Runnable to be added to the message queue.
+ * The runnable will be run on the user interface thread.</p>
+ */
+public boolean post(Runnable action) {
+    final AttachInfo attachInfo = mAttachInfo;
+    if (attachInfo != null) {
+        return attachInfo.mHandler.post(action);
+    }
 
-2. Activity的runOnUiThread()方法
+    // Postpone the runnable until we know on which thread it needs to run.
+    // Assume that the runnable will be successfully placed after attach.
+    getRunQueue().post(action);
+    return true;
+}
+```
+## 7.2、Activity的runOnUiThread()方法
 
-         /**
-         * Runs the specified action on the UI thread. If the current thread is the UI
-         * thread, then the action is executed immediately. If the current thread is
-         * not the UI thread, the action is posted to the event queue of the UI thread.
-         *
-         * @param action the action to run on the UI thread
-         */
-        public final void runOnUiThread(Runnable action) {
-            if (Thread.currentThread() != mUiThread) {
-                mHandler.post(action);
-            } else {
-                action.run();
-            }
-        }
+```java
+/**
+* Runs the specified action on the UI thread. If the current thread is the UI
+* thread, then the action is executed immediately. If the current thread is
+* not the UI thread, the action is posted to the event queue of the UI thread.
+*
+* @param action the action to run on the UI thread
+*/
+   public final void runOnUiThread(Runnable action) {
+       if (Thread.currentThread() != mUiThread) {
+           mHandler.post(action);
+       } else {
+           action.run();
+       }
+   }
+```
+
 
 
 ## 总结：
@@ -637,19 +866,6 @@ Looper和thread以及messageQueue都是一一对应的，而一个Handler只能�
 http://blog.csdn.net/guolin_blog/article/details/9991569
 
 
-
-
-
-
-
-# MessageQueue
-
-整个Handler流程如上图，介绍原理前，我们先了解几个概念。
-
-- Handle 消息机制中作为一个对外暴露的工具，其内部包含了一个 Looper 。负责Message的发送及处理。Handler.sendMessage() ：向消息队列发送各种消息事件；Handler.handleMessage()：处理相应的消息事件
-- Looper 作为消息循环的核心，其内部包含了一个消息队列 MessageQueue ，用于记录所有待处理的消息；通过Looper.loop()不断地从MessageQueue中抽取Message，按分发机制将消息分发给目标处理者，可以看成是消息泵。注意，线程切换就是在这一步完成的。
-- MessageQueue 则作为一个消息队列，则包含了一系列链接在一起的 Message ；不要被这个Queue的名字给迷惑了，就以为它是一个队列，但其实内部通过单链表的数据结构来维护消息列表，等待Looper的抽取。
-- Message 则是消息体，内部又包含了一个目标处理器 target ，这个 target 正是最终处理它的 Handler。
 
 1、主线程中Looper.Loop的不会卡死？
 
