@@ -13,94 +13,98 @@
 
 1.frameworks/base/core/java/android/content/ContextWrapper.java
 
-    public ComponentName startService(Intent service) {
-            warnIfCallingFromSystemProcess();
-            return startServiceCommon(service, mUser);
-        }
-    private ComponentName startServiceCommon(Intent service, UserHandle user) {
-        ComponentName cn = ActivityManagerNative.getDefault().startService(
-            mMainThread.getApplicationThread(), service, service.resolveTypeIfNeeded(
-                        getContentResolver()), getOpPackageName(), user.getIdentifier());    
-    ...
+```java
+public ComponentName startService(Intent service) {
+        warnIfCallingFromSystemProcess();
+        return startServiceCommon(service, mUser);
     }
+private ComponentName startServiceCommon(Intent service, UserHandle user) {
+    ComponentName cn = ActivityManagerNative.getDefault().startService(
+        mMainThread.getApplicationThread(), service, service.resolveTypeIfNeeded(
+                    getContentResolver()), getOpPackageName(), user.getIdentifier());    
+...
+}
+```
 2.通过ActivityManagerNative.getDefault().startService的ActivityManagerNative->ActivityManagerService->ActiveServices.startServiceLocked
 
-    ComponentName startServiceLocked(IApplicationThread caller, Intent service, String resolvedType,
-    int callingPid, int callingUid, String callingPackage, int userId)
-    throws TransactionTooLargeException {
-    …
-    //PackageManagerService解析出Intent得到要启动的ServiceRecord
-    ServiceLookupResult res =
-    retrieveServiceLocked(service, resolvedType, callingPackage,
-    callingPid, callingUid, userId, true, callerFg);
-        ServiceRecord r = res.record;            
-    ... 
-    return startServiceInnerLocked(smap, service, r, callerFg, addToStarting);
+```java
+ComponentName startServiceLocked(IApplicationThread caller, Intent service, String resolvedType,
+int callingPid, int callingUid, String callingPackage, int userId)
+throws TransactionTooLargeException {
+…
+//PackageManagerService解析出Intent得到要启动的ServiceRecord
+ServiceLookupResult res =
+retrieveServiceLocked(service, resolvedType, callingPackage,
+callingPid, callingUid, userId, true, callerFg);
+    ServiceRecord r = res.record;            
+... 
+return startServiceInnerLocked(smap, service, r, callerFg, addToStarting);
+}
+ComponentName startServiceInnerLocked(ServiceMap smap, Intent service, ServiceRecord r,
+boolean callerFg, boolean addToStarting) throws TransactionTooLargeException {
+…
+String error = bringUpServiceLocked(r, service.getFlags(), callerFg, false);
+…
+return r.name;
+}
+private final String bringUpServiceLocked(ServiceRecord r,
+int intentFlags, boolean execInFg, boolean whileRestarting) {
+//如果进程已经存在的情况下就不是处理下面的流程，直接处理onStart的流程
+if (r.app != null && r.app.thread != null) {
+sendServiceArgsLocked(r, execInFg, false);
+return null;
+}
+//处于restart的状态(在onStartCommand里面处理了服务被杀之后的行为)也不会处理
+if (!whileRestarting && r.restartDelay > 0) {
+return null;
+}
+if (mRestartingServices.remove(r)) {
+clearRestartingIfNeededLocked(r);
+}
+if (r.delayed) {
+getServiceMap(r.userId).mDelayedStartList.remove(r);
+r.delayed = false;
+}
+//…
+final boolean isolated = (r.serviceInfo.flags&ServiceInfo.FLAG_ISOLATED_PROCESS) != 0;
+final String procName = r.processName;
+ProcessRecord app;
+//独立的进程运行isolated为true,
+if (!isolated) {
+app = mAm.getProcessRecordLocked(procName, r.appInfo.uid, false);
+if (app != null && app.thread != null) {
+try {
+app.addPackage(r.appInfo.packageName, r.appInfo.versionCode, mAm.mProcessStats);
+//直接启动服务，不用开启新的进程
+realStartServiceLocked(r, app, execInFg);
+return null;
+} catch (RemoteException e) {
+Slog.w(TAG, “Exception when starting service ” + r.shortName, e);
+}
+}
+} else {
+app = r.isolatedProc;
+}
+第一次创建时，走到这里，先创建一个service的进程
+if (app == null) {
+    //开启新的进程 
+    if ((app=mAm.startProcessLocked(procName, r.appInfo, true, intentFlags,
+            "service", r.name, false, isolated, false))== null) {
+        bringDownServiceLocked(r);
+        return msg;
     }
-    ComponentName startServiceInnerLocked(ServiceMap smap, Intent service, ServiceRecord r,
-    boolean callerFg, boolean addToStarting) throws TransactionTooLargeException {
-    …
-    String error = bringUpServiceLocked(r, service.getFlags(), callerFg, false);
-    …
-    return r.name;
+    if (isolated) {
+        r.isolatedProc = app;
     }
-    private final String bringUpServiceLocked(ServiceRecord r,
-    int intentFlags, boolean execInFg, boolean whileRestarting) {
-    //如果进程已经存在的情况下就不是处理下面的流程，直接处理onStart的流程
-    if (r.app != null && r.app.thread != null) {
-    sendServiceArgsLocked(r, execInFg, false);
-    return null;
-    }
-    //处于restart的状态(在onStartCommand里面处理了服务被杀之后的行为)也不会处理
-    if (!whileRestarting && r.restartDelay > 0) {
-    return null;
-    }
-    if (mRestartingServices.remove(r)) {
-    clearRestartingIfNeededLocked(r);
-    }
-    if (r.delayed) {
-    getServiceMap(r.userId).mDelayedStartList.remove(r);
-    r.delayed = false;
-    }
-    //…
-    final boolean isolated = (r.serviceInfo.flags&ServiceInfo.FLAG_ISOLATED_PROCESS) != 0;
-    final String procName = r.processName;
-    ProcessRecord app;
-    //独立的进程运行isolated为true,
-    if (!isolated) {
-    app = mAm.getProcessRecordLocked(procName, r.appInfo.uid, false);
-    if (app != null && app.thread != null) {
-    try {
-    app.addPackage(r.appInfo.packageName, r.appInfo.versionCode, mAm.mProcessStats);
-    //直接启动服务，不用开启新的进程
-    realStartServiceLocked(r, app, execInFg);
-    return null;
-    } catch (RemoteException e) {
-    Slog.w(TAG, “Exception when starting service ” + r.shortName, e);
-    }
-    }
-    } else {
-    app = r.isolatedProc;
-    }
-    第一次创建时，走到这里，先创建一个service的进程
-    if (app == null) {
-        //开启新的进程 
-        if ((app=mAm.startProcessLocked(procName, r.appInfo, true, intentFlags,
-                "service", r.name, false, isolated, false))== null) {
-            bringDownServiceLocked(r);
-            return msg;
-        }
-        if (isolated) {
-            r.isolatedProc = app;
-        }
-    }
-    //将ServiceRecord加入即将启动mPendingServices列表里，后面进程启动成功后在启动Service
-    if (!mPendingServices.contains(r)) {
-        mPendingServices.add(r);
-    }
-    //...
-    return null;
-    }
+}
+//将ServiceRecord加入即将启动mPendingServices列表里，后面进程启动成功后在启动Service
+if (!mPendingServices.contains(r)) {
+    mPendingServices.add(r);
+}
+//...
+return null;
+}
+```
 如果进程已经存在的情况下就不是处理下面的流程，直接调用realStartServiceLocked处理onStart的流程。ActivityManagerService.startProcessLocked开启进程，procName为AndroidManifest中Service标签了process指定的进程名，默认是包名。
 
     final ProcessRecord startProcessLocked(String processName, ApplicationInfo info,
@@ -259,70 +263,74 @@ attachApplicationLocked
 
 使用ApplicationThread发起IPC调用bindApplication ->ActivityThread.bindApplication:
 
-    public final void bindApplication(String processName, ApplicationInfo appInfo,
-                    List<ProviderInfo> providers, ComponentName instrumentationName,
-                    ProfilerInfo profilerInfo, Bundle instrumentationArgs,
-                    IInstrumentationWatcher instrumentationWatcher,
-                    IUiAutomationConnection instrumentationUiConnection, int debugMode,
-                    boolean enableOpenGlTrace, boolean isRestrictedBackupMode, boolean persistent,
-                    Configuration config, CompatibilityInfo compatInfo, Map<String, IBinder> services,
-                    Bundle coreSettings) {
-                //... init
-                IPackageManager pm = getPackageManager();
-                android.content.pm.PackageInfo pi = null;
-                try {
-                    pi = pm.getPackageInfo(appInfo.packageName, 0, UserHandle.myUserId());
-                } catch (RemoteException e) {
-                }
-                if (pi != null) {
-                   //处理sharedUid的情况
-                   //...
-                }
-                AppBindData data = new AppBindData();
-                data.processName = processName;
-                data.appInfo = appInfo;
-                data.providers = providers;
-                data.instrumentationName = instrumentationName;
-                data.instrumentationArgs = instrumentationArgs;
-                data.instrumentationWatcher = instrumentationWatcher;
-                data.instrumentationUiAutomationConnection = instrumentationUiConnection;
-                data.debugMode = debugMode;
-                data.enableOpenGlTrace = enableOpenGlTrace;
-                data.restrictedBackupMode = isRestrictedBackupMode;
-                data.persistent = persistent;
-                data.config = config;
-                data.compatInfo = compatInfo;
-                data.initProfilerInfo = profilerInfo;
-                sendMessage(H.BIND_APPLICATION, data);
+```java
+public final void bindApplication(String processName, ApplicationInfo appInfo,
+                List<ProviderInfo> providers, ComponentName instrumentationName,
+                ProfilerInfo profilerInfo, Bundle instrumentationArgs,
+                IInstrumentationWatcher instrumentationWatcher,
+                IUiAutomationConnection instrumentationUiConnection, int debugMode,
+                boolean enableOpenGlTrace, boolean isRestrictedBackupMode, boolean persistent,
+                Configuration config, CompatibilityInfo compatInfo, Map<String, IBinder> services,
+                Bundle coreSettings) {
+            //... init
+            IPackageManager pm = getPackageManager();
+            android.content.pm.PackageInfo pi = null;
+            try {
+                pi = pm.getPackageInfo(appInfo.packageName, 0, UserHandle.myUserId());
+            } catch (RemoteException e) {
             }
-    private void sendMessage(int what, Object obj) {
-            sendMessage(what, obj, 0, 0, false);
-    }
-    final H mH = new H();
-    private void sendMessage(int what, Object obj, int arg1, int arg2, boolean async) {
-        Message msg = Message.obtain();
-        msg.what = what;
-        msg.obj = obj;
-        msg.arg1 = arg1;
-        msg.arg2 = arg2;
-        if (async) {
-            msg.setAsynchronous(true);
+            if (pi != null) {
+               //处理sharedUid的情况
+               //...
+            }
+            AppBindData data = new AppBindData();
+            data.processName = processName;
+            data.appInfo = appInfo;
+            data.providers = providers;
+            data.instrumentationName = instrumentationName;
+            data.instrumentationArgs = instrumentationArgs;
+            data.instrumentationWatcher = instrumentationWatcher;
+            data.instrumentationUiAutomationConnection = instrumentationUiConnection;
+            data.debugMode = debugMode;
+            data.enableOpenGlTrace = enableOpenGlTrace;
+            data.restrictedBackupMode = isRestrictedBackupMode;
+            data.persistent = persistent;
+            data.config = config;
+            data.compatInfo = compatInfo;
+            data.initProfilerInfo = profilerInfo;
+            sendMessage(H.BIND_APPLICATION, data);
         }
-        mH.sendMessage(msg);
+private void sendMessage(int what, Object obj) {
+        sendMessage(what, obj, 0, 0, false);
+}
+final H mH = new H();
+private void sendMessage(int what, Object obj, int arg1, int arg2, boolean async) {
+    Message msg = Message.obtain();
+    msg.what = what;
+    msg.obj = obj;
+    msg.arg1 = arg1;
+    msg.arg2 = arg2;
+    if (async) {
+        msg.setAsynchronous(true);
     }
+    mH.sendMessage(msg);
+}
+```
 
 
  主线程的Looper前面已经在ActivityThread主线程里面初始化了，然后向Handler发消息实现进程切换(因为bindApplication是在客户端Binder线程池里面调用的)。
 
-     private class H extends Handler {
-             public void handleMessage(Message msg) {
-                //...
-                 case BIND_APPLICATION:
-                            AppBindData data = (AppBindData)msg.obj;
-                            handleBindApplication(data);
-                            break;
-             }
-          }
+```java
+ private class H extends Handler {
+         public void handleMessage(Message msg) {
+            //...
+             case BIND_APPLICATION:
+                        AppBindData data = (AppBindData)msg.obj;
+                        handleBindApplication(data);
+                        break;
+         }
+      }
+```
 
 接着调用ActivityThread的handleBindApplication，主要是然客户端初始化应用程序的一些状态比如时区地域，Instrumentation，LoadedApk等等。
 
@@ -348,19 +356,22 @@ attachApplicationLocked
         }
 attachApplicationLocked，mPendingServices就是前面加入列表的ServiceRecord，过滤要启动的ServiceRecord，调用realStartServiceLocked:   
 
-    boolean attachApplicationLocked(ProcessRecord proc, String processName)
-            throws RemoteException {
-        boolean didSomething = false;
-        // Collect any services that are waiting for this process to come up.
-        if (mPendingServices.size() > 0) {
-            ServiceRecord sr = null;
-            try {
-                for (int i=0; i<mPendingServices.size(); i++) { sr = mPendingServices.get(i); //过滤我们客户端当前的进程 if (proc != sr.isolatedProc && (proc.uid != sr.appInfo.uid || !processName.equals(sr.processName))) { continue; } mPendingServices.remove(i); i--; proc.addPackage(sr.appInfo.packageName, sr.appInfo.versionCode, mAm.mProcessStats); realStartServiceLocked(sr, proc, sr.createdFromFg); didSomething = true; } } catch (RemoteException e) { Slog.w(TAG, "Exception in new application when starting service " - sr.shortName, e); throw e; } } if (mRestartingServices.size()> 0) {
-           //处理restart的状态
-           //...
-        }
-        return didSomething;
+```java
+boolean attachApplicationLocked(ProcessRecord proc, String processName)
+        throws RemoteException {
+    boolean didSomething = false;
+    // Collect any services that are waiting for this process to come up.
+    if (mPendingServices.size() > 0) {
+        ServiceRecord sr = null;
+        try {
+            for (int i=0; i<mPendingServices.size(); i++) { sr = mPendingServices.get(i); //过滤我们客户端当前的进程 
+                                                           if (proc != sr.isolatedProc && (proc.uid != sr.appInfo.uid || !processName.equals(sr.processName))) { continue; } mPendingServices.remove(i); i--; proc.addPackage(sr.appInfo.packageName, sr.appInfo.versionCode, mAm.mProcessStats); realStartServiceLocked(sr, proc, sr.createdFromFg); didSomething = true; } } catch (RemoteException e) { Slog.w(TAG, "Exception in new application when starting service " - sr.shortName, e); throw e; } } if (mRestartingServices.size()> 0) {
+       //处理restart的状态
+       //...
     }
+    return didSomething;
+}
+```
 pendingStarts在放入要执行start操作的列表里面，在执行sendServiceArgsLocked告诉客户端执行onStart:
 
     private final void realStartServiceLocked(ServiceRecord r,
@@ -550,6 +561,7 @@ sd = mPackageInfo.getServiceDispatcher(conn, getOuterContext(),
  
 
 
+
    ServiceDispatcher类中的方法
 
     static final class ServiceDispatcher {
@@ -611,6 +623,7 @@ sd = mPackageInfo.getServiceDispatcher(conn, getOuterContext(),
    
 
 
+
  分析2过程：
     int res = ActivityManagerNative.getDefault().bindService(
             mMainThread.getApplicationThread(), getActivityToken(), service,
@@ -667,28 +680,29 @@ sd = mPackageInfo.getServiceDispatcher(conn, getOuterContext(),
 
 
 ​            
-            if (s.app != null && b.intent.received) {
-                // Service is already running, so we can immediately
-                // publish the connection.
-                ...
-                    //重复bind时会走这里，直接调用requestServiceBindingLocked
-                    c.conn.connected(s.name, b.intent.binder);
-                ...
-                // If this is the first app connected back to this binding,
-                // and the service had previously asked to be told when
-                // rebound, then do so.
-                if (b.intent.apps.size() == 1 && b.intent.doRebind) {
-                    requestServiceBindingLocked(s, b.intent, callerFg, true);
-                }
-            } else if (!b.intent.requested) {
-                requestServiceBindingLocked(s, b.intent, callerFg, false);
-            
+​            if (s.app != null && b.intent.received) {
+​                // Service is already running, so we can immediately
+​                // publish the connection.
+​                ...
+​                    //重复bind时会走这里，直接调用requestServiceBindingLocked
+​                    c.conn.connected(s.name, b.intent.binder);
+​                ...
+​                // If this is the first app connected back to this binding,
+​                // and the service had previously asked to be told when
+​                // rebound, then do so.
+​                if (b.intent.apps.size() == 1 && b.intent.doRebind) {
+​                    requestServiceBindingLocked(s, b.intent, callerFg, true);
+​                }
+​            } else if (!b.intent.requested) {
+​                requestServiceBindingLocked(s, b.intent, callerFg, false);
+​            
             }
         ...
         return 1;
     }
 
    
+
 
 bringUpServiceLocked
 
@@ -824,6 +838,7 @@ ActivityManagerService.attachApplicationLocked->ActiveServices.attachApplication
             }
 
  
+
 
 
    ActivityManagerService.attachApplicationLocked

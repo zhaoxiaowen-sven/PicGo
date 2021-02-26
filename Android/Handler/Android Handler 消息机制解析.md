@@ -1,126 +1,177 @@
+# Handler消息机制
 
+Handler是Android中一种线程间传递消息的机制。主要应用的场景，将子线程中待更新的UI信息传递到主线程。本文将从以下几个方面介绍Handler：
 
-## 一、从 Handler.sendMessage 说起：
+1. Handler的消息发送和接收 
+2. Handler的工作原理
+3. Handler、Thread、Looper、
+4. Handler用法
 
-Android UI是线程不安全的，如果在子线程中尝试进行UI操作，程序就有可能会崩溃。要处理这样的问题就需要通过handler的异步消息处理机制了，通常有2种写法：
-1.sendMessage
+# 一、消息分发过程
 
-    public class MainActivity extends AppCompatActivity {
-        private Handler mHandler;
-        @Override
-        protected void onCreate(Bundle savedInstanceState) {
-            mHandler = new Handler(){
+## 1.1、从sendMessage开始
+
+Handler常见的用法如下，主线程中创建Handler，子线程中使用sendMessage发送消息。
+
+```java
+public class MainActivity extends AppCompatActivity {
+    private Handler mHandler;
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        mHandler = new Handler(){
+            @Override
+            public void handleMessage(Message msg) {
+                //收到消息后，更新 ui
+                }
+        };
+        
+        new Thread(new Runnable() {
                 @Override
-                public void handleMessage(Message msg) {
-                    //收到消息后，更新 ui
-                    }
-            };
-            
-            new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        //发送消息
-                        mHandler.sendMessage();
-                    }
-                }).start();
-            }
-    }
-
-2.post
-    
-    ...
-    mHandler = new Handler();
-    new Thread(new Runnable() {
-           @Override
-           public void run() {
-                mHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        //ui操作
-                    }
-                }); 
-           }
-       }).start();
-    ...
-
-其实这2种方式最终都是殊途同归：最终调用的都是Handler的sendMessageAtTime方法
-    
-    public boolean sendMessageAtTime(Message msg, long uptimeMillis) {
-        MessageQueue queue = mQueue;
-        if (queue == null) {
-            RuntimeException e = new RuntimeException(
-                    this + " sendMessageAtTime() called with no mQueue");
-            Log.w("Looper", e.getMessage(), e);
-            return false;
+                public void run() {
+                    //发送消息
+                    mHandler.sendMessage();
+                }
+            }).start();
         }
-        return enqueueMessage(queue, msg, uptimeMillis);
+}
+```
+
+除了上面这种写法外，常见的写法还有post这种：
+
+```java
+mHandler = new Handler();
+new Thread(new Runnable() {
+       @Override
+       public void run() {
+            mHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    //ui操作
+                }
+            }); 
+       }
+   }).start();
+...
+```
+
+以上2种方式最终都是殊途同归，最终调用的都是Handler的**sendMessageAtTime**方法。
+```java
+public boolean sendMessageAtTime(Message msg, long uptimeMillis) {
+    MessageQueue queue = mQueue;
+    if (queue == null) {
+        RuntimeException e = new RuntimeException(
+                this + " sendMessageAtTime() called with no mQueue");
+        Log.w("Looper", e.getMessage(), e);
+        return false;
     }
-    
-    private boolean enqueueMessage(MessageQueue queue, Message msg, long uptimeMillis) {
+    return enqueueMessage(queue, msg, uptimeMillis);
+}
+```
+
+不同地方在于post 将Runnable赋值给msg.callback，
+
+```java
+public final boolean post(Runnable r){
+   return  sendMessageDelayed(getPostMessage(r), 0);
+}
+
+private static Message getPostMessage(Runnable r) {
+    Message m = Message.obtain();
+    m.callback = r;
+    return m;
+}
+```
+
+最后在dispatchMessage处理消息时，post方式msg.callback不为空，会执行handleCalback，最终回调Runnable的run方法。
+
+```java
+public void dispatchMessage(Message msg) {
+    // post的执行
+    if (msg.callback != null) {
+        handleCalback(msg);
+    } else {
+        // sendMessage的执行
+        if (mCallback != null) {
+            if (mCallback.handleMessage(msg)) {
+                return;
+            }
+        }
+        handleMessage(msg);
+    }
+}
+
+private static void handleCallback(Message message) {
+    message.callback.run();
+}
+```
+细心的读者可能会问mCallback又是什么呢？其实mCallback就是你在new Handler时可以传的一个参数，如果你像下面这样在Handler.Callback中返回true，就可以拦截消息不让消息在Handler的handler的handleMessage中处理。
+```java
+Handler handler1 = new Handler(new Handler.Callback() {
+    @Override
+    public boolean handleMessage(@NonNull Message msg) {
+        return true;
+    }
+});
+```
+
+## 1.2、消息入队
+
+sendMessageAtTime后发生了什么？继续分析sendMessageAtTime方法
+
+```java
+public boolean sendMessageAtTime(@NonNull Message msg, long uptimeMillis) {
+    MessageQueue queue = mQueue;
+    if (queue == null) {
+        RuntimeException e = new RuntimeException(
+                this + " sendMessageAtTime() called with no mQueue");
+        Log.w("Looper", e.getMessage(), e);
+        return false;
+    }
+    return enqueueMessage(queue, msg, uptimeMillis);
+}
+
+private boolean enqueueMessage(@NonNull MessageQueue queue, @NonNull Message msg,
+            long uptimeMillis) {
+        // 将Handler赋值给msg.target,消息分发的时候会用到
         msg.target = this;
+        msg.workSourceUid = ThreadLocalWorkSource.getUid();
+
         if (mAsynchronous) {
             msg.setAsynchronous(true);
         }
         return queue.enqueueMessage(msg, uptimeMillis);
     }
+```
 
-不同地方在于post 将Runnable封装到Message中，赋值给msg.callback：
+经过一系列的调用sendMessageAtTime最终调用到了MessagQueue.enqueueMessage。
 
-    public final boolean post(Runnable r)
-    {
-       return  sendMessageDelayed(getPostMessage(r), 0);
-    }
-    
-    private static Message getPostMessage(Runnable r) {
-        Message m = Message.obtain();
-        m.callback = r;
-        return m;
-    }
+enqueueMessage将所有收到的消息按发送时间进行排序，加入到MessageQueue（消息队列）中，MessageQueue是怎么来的后面再讲。
 
-最后在dispatchMessage处理消息时，sendMessage会执行handleMessage，而post方式msg.callback不为空，看上面代码的第8行，会执行handleCalback，最终回调Runnable的run方法。
-
-    public void dispatchMessage(Message msg) {
-        if (msg.callback != null) {
-            handleCalback(msg);
-        } else {
-            if (mCallback != null) {
-                if (mCallback.handleMessage(msg)) {
-                    return;
-                }
-            }
-            handleMessage(msg);
+```java
+boolean enqueueMessage(Message msg, long when) {
+        if (msg.target == null) {
+            throw new IllegalArgumentException("Message must have a target.");
         }
-    }
-    
-    private static void handleCallback(Message message) {
-        message.callback.run();
-    }
-细心的读者可能会问mCallback又是什么呢？其实mCallback就是你在new Handler时可以传的一个参数，如果你像下面这样在Handler.Callback中返回true，就可以拦截消息不让消息在Handler的handler的handleMessage中处理
-    
-    mHandler = new Handler(new Handler.Callback() {
-                @Override
-                public boolean handleMessage(Message msg) {
-                    //可以拦截
-                    return true;
-                }
-            }){
-                @Override
-                public void handleMessage(Message msg) {
-                
-                }
-            };
 
-## 二、sendMessage之后发生了什么？
-回到sendMessageAtTime方法中，可以看到会调用MessagQueue.enqueueMessage，MessageQueue就是我们常说的消息队列， 用于将所有收到的消息以队列的形式进行排列，并提供入队和出队的方法。通过enqueueMessage就将我们发的消息加入到了消息队列中。
-
-    boolean enqueueMessage(Message msg, long when) {
-        ...
         synchronized (this) {
-            ...
+            if (msg.isInUse()) {
+                throw new IllegalStateException(msg + " This message is already in use.");
+            }
+
+            if (mQuitting) {
+                IllegalStateException e = new IllegalStateException(
+                        msg.target + " sending message to a Handler on a dead thread");
+                Log.w(TAG, e.getMessage(), e);
+                msg.recycle();
+                return false;
+            }
+
             msg.markInUse();
             msg.when = when;
+            //1、拿到队列头部消息
             Message p = mMessages;
             boolean needWake;
+            //2、如果消息不需要延时，或者消息的执行时间比头部消息早，插到队列头部
             if (p == null || when == 0 || when < p.when) {
                 // New head, wake up the event queue if blocked.
                 msg.next = p;
@@ -132,6 +183,7 @@ Android UI是线程不安全的，如果在子线程中尝试进行UI操作，�
                 // and the message is the earliest asynchronous message in the queue.
                 needWake = mBlocked && p.target == null && msg.isAsynchronous();
                 Message prev;
+                // 3、根据时间，将消息插到队列中合适的位置
                 for (;;) {
                     prev = p;
                     p = p.next;
@@ -145,156 +197,274 @@ Android UI是线程不安全的，如果在子线程中尝试进行UI操作，�
                 msg.next = p; // invariant: p == prev.next
                 prev.next = msg;
             }
-        ...
-    }
 
-通过以上我们知道了入队，那又该如何出队呢？这就要涉及到Looper了，我们在new 一个Handler的时候，Handler的构造方法中就会初始化一个Looper
-
-    public Handler(Callback callback, boolean async) {
-        if (FIND_POTENTIAL_LEAKS) {
-            final Class<? extends Handler> klass = getClass();
-            if ((klass.isAnonymousClass() || klass.isMemberClass() || klass.isLocalClass()) &&
-                    (klass.getModifiers() & Modifier.STATIC) == 0) {
-                Log.w(TAG, "The following Handler class should be static or leaks might occur: " +
-                    klass.getCanonicalName());
+            // We can assume mPtr != 0 because mQuitting is false.
+            if (needWake) {
+                nativeWake(mPtr);
             }
         }
-        mLooper = Loope.myLooper();
-        if (mLooper == null) {
-            throw new RuntimeException(
-                "Can't create handler inside thread that has not called Looper.prepare()");
-        }
-        mQueue = mLooper.mQueue;
-        mCallback = callback;
-        mAsynchronous = async;
+        return true;
     }
-    
-    /**
-     * Return the Looper object associated with the current thread.  Returns
-     * null if the calling thread is not associated with a Looper.
-     */
-    public static @Nullable Looper myLooper() {
-        return sThreadLocal.get();
-    }
+```
 
-代码第10行，我们可以看到handler 中的mlooper是通过Loope.myLooper()获取，同时我们要注意到Handler的mQueue其实就是Looper的mQueue！继续跟踪到Looper.myLooper，认真看注释，如果sThreadLocal中有Looper存在就返回Looper，如果没有Looper存在自然就返回空了。因此你可以想象得到是在哪里给sThreadLocal设置Looper了吧，那就是Looper.prepare()方法Looper.prepare()在哪里被调用的，我们先放到一边，继续回到我们的上个话题，消息通过Looper怎么出队?请看Looper.loop()。
+22 - 24行：对收到的消息按发送时间进行排序，如果当前消息不需要延时，放到头部；若是延时消息，则根据发送时间放到队列合适位置。
 
-三、Looper.loop()
+至此，消息的发送过程全部结束了。什么！那消息是怎么分发的呢？我们先给出答案，是通过Looper.loop。
+
+## 1.3、消息出队
+
+刚才说了Handler的消息分发是通过Looper.loop，接下来看下代码，上车！
+
+```java
     public static void loop() {
         final Looper me = myLooper();
         if (me == null) {
             throw new RuntimeException("No Looper; Looper.prepare() wasn't called on this thread.");
         }
+        // 1、从Looper中消息队列
         final MessageQueue queue = me.mQueue;
 
-        // Make sure the identity of this thread is that of the local process,
-        // and keep track of what that identity token actually is.
-        Binder.clearCallingIdentity();
-        final long ident = Binder.clearCallingIdentity();
-    
         for (;;) {
+            // 2、从消息队列中取出消息
             Message msg = queue.next(); // might block
             if (msg == null) {
                 // No message indicates that the message queue is quitting.
                 return;
             }
-            
-            ...
-            
+			// 省略 ...
             try {
+                // 3、调用handler.dispatchMessage
                 msg.target.dispatchMessage(msg);
+                end = (slowDispatchThresholdMs == 0) ? 0 : SystemClock.uptimeMillis();
             } finally {
                 if (traceTag != 0) {
                     Trace.traceEnd(traceTag);
                 }
             }
-            ...
+        
+			//省略 ...
+            msg.recycleUnchecked();
         }
-       msg.recycleUnchecked();
     }
+```
 
-可以看到，这个方法从第6行开始，进入了一个死循环，然后不断地调用的MessageQueue的next()方法，这个next()方法就是消息队列的出队方法。它的简单逻辑就是如果当前MessageQueue中存在mMessages(即待处理消息)，就将这个消息出队，然后让下一条消息成为mMessages，否则就进入一个阻塞状态，一直等到有新的消息入队。继续看loop()方法的第14行，每当有一个消息出队，就将它传递到msg.target的dispatchMessage()方法中，那这里msg.target又是什么呢？其实就是Handler啦，你观察一下上面sendMessageAtTime()方法时调用的enqueueMessage方法的第2行就可以看出来了，出队完成！
+主要步骤如下：
 
-第24行消息回收过程，这里涉及到Message的回收和复用，后面再讲。
+6行：从Looper中取出消息队列
 
-总结一下：loop方法其实就是建立一个死循环，然后从消息队列中逐个取出消息，进行处理和回收的过程。
+9行：开启死循环，然后不断地调用的MessageQueue的next()方法，这个next()方法就是消息队列的出队方法。如果当前MessageQueue中存在待处理的消息，就将这个消息出队，否则就进入一个阻塞状态，一直等到有新的消息入队。
 
-## 四、Looper.prepare到底做了什么事？
+19行：消息分发msg.target的dispatchMessage()方法中，那这里msg.target又是什么呢？其实就是handler，回头看下enqueueMessage。
 
-    public static void prepare() {
-        prepare(true);
+28行：消息回收过程，这里涉及到Message的回收和复用，后面再讲。
+
+**总结一下：Handler通过sendMessage将消息加入到消息队列中，最后在通过Looper.loop从消息队列中逐个取出消息执行。**原理如下图所示：
+
+![image-20210226151751578](../../pics/image-20210226151751578.png)
+
+好了，Handler的消息分发机制就介绍完了。就这？当然不！上述介绍过程中涉及到几个概念Loope，MessageQueue，还没说呢？我们先来看下Handler涉及到的几个概念。
+
+- Handle 消息机制中作为一个对外暴露的工具，其内部包含了一个 Looper 。负责Message的发送及处理。Handler.sendMessage() ：向消息队列发送各种消息事件；Handler.handleMessage()：处理相应的消息事件
+- Looper 作为消息循环的核心，其内部包含了一个消息队列 MessageQueue ，用于记录所有待处理的消息；通过Looper.loop()不断地从MessageQueue中抽取Message，按分发机制将消息分发给目标处理者，可以看成是消息泵。注意，线程切换就是在这一步完成的。
+- MessageQueue 则作为一个消息队列，则包含了一系列链接在一起的 Message ；不要被这个Queue的名字给迷惑了，就以为它是一个队列，但其实内部通过单链表的数据结构来维护消息列表，等待Looper的抽取。
+- Message 则是消息体，内部又包含了一个目标处理器 target ，这个 target 正是最终处理它的 Handler。
+
+下面先来看下Looper。
+
+# 二、Looper
+
+通过以上的介绍我们知道Looper是handler中消息分发的核心，那它是怎么来的？我们先来看下Handler的构造函数。
+
+```java
+public Handler(@Nullable Callback callback, boolean async) {
+	// loop赋值
+    mLooper = Looper.myLooper();
+    if (mLooper == null) {
+        throw new RuntimeException(
+            "Can't create handler inside thread " + Thread.currentThread()
+                    + " that has not called Looper.prepare()");
     }
-    
-    private static void prepare(boolean quitAllowed) {
-        if (sThreadLocal.get() != null) {
-            throw new RuntimeException("Only one Looper may be created per thread");
+    mQueue = mLooper.mQueue;
+    mCallback = callback;
+    mAsynchronous = async;
+}
+
+public static @Nullable Looper myLooper() {
+    return sThreadLocal.get();
+}
+```
+
+Looper的赋值是通过looper.myLooper()，最终调到了sThreadLocal.get()。这个sThreadLocal又是什么？
+
+```java
+// sThreadLocal.get() will return null unless you've called prepare().
+@UnsupportedAppUsage
+static final ThreadLocal<Looper> sThreadLocal = new ThreadLocal<Looper>();
+```
+
+这个sThreadLocal是一个ThreadLocal对象，存的是Looper对象。什么？ThreadLocal也不懂？来来来，先记住个概念，后面再解释：ThreadLocal提供了线程的局部变量，每个线程都可以通过set()和get()来对这个局部变量进行操作，但不会和其他线程的局部变量进行冲突，实现了线程的数据隔离。也就说通**过ThreadLocal可以存取当前线程的Looper对象**。
+
+仔细看sThreadLocal的注释，除非您已调用prepare()，否则sThreadLocal.get()将返回null。那就看下loop.prepare吧。
+
+## 2.1、loop.prepare
+
+```java
+public static void prepare() {
+    prepare(true);
+}
+
+private static void prepare(boolean quitAllowed) {
+    // 每个线程只能初始化一次looper
+    if (sThreadLocal.get() != null) {
+        throw new RuntimeException("Only one Looper may be created per thread");
+    }
+    sThreadLocal.set(new Looper(quitAllowed));
+}
+
+private Looper(boolean quitAllowed) {
+   // 注意，这是messageQueue初始化的地方
+   mQueue = new MessageQueue(quitAllowed);
+   mThread = Thread.currentThread();
+}
+```
+
+10行：新建一个Looper对象并存到sThreadLocal中。
+
+14行：注意这里，handler中的MessageQuee就是Looper初始化时构造出来的。
+
+也就是说，new Hanlder 之前必须要调用 Looper.prepare方法，那为何在主线程中使用是不需要呢？其实Android在程序启动的时候，通过ActivityThread帮我们创建主线程时已经初始化好了，代码如下:
+
+```java
+public static void main(String[] args) {
+    //省略...
+    // 1、 主线程Looper.parpare!
+    Looper.prepareMainLooper();
+    ActivityThread thread = new ActivityThread();
+    thread.attach(false);
+    if (sMainThreadHandler == null) {
+        sMainThreadHandler = thread.getHandler();
+    }
+    if (false) {
+        Looper.myLooper().setMessageLogging(new
+                LogPrinter(Log.DEBUG, "ActivityThread"));
+    }
+    // 2、looper.loop
+    Looper.loop();
+    //省略...
+}
+```
+
+第3行:调用了 Looper.prepareMainLooper()，再调用到Looper的prepare。
+
+```java
+/**
+ * Initialize the current thread as a looper, marking it as an
+ * application's main looper. See also: {@link #prepare()}
+ *
+ * @deprecated The main looper for your application is created by the Android environment,
+ *   so you should never need to call this function yourself.
+ */
+public static void prepareMainLooper() {
+    prepare(false);
+    synchronized (Looper.class) {
+        if (sMainLooper != null) {
+            throw new IllegalStateException("The main Looper has already been prepared.");
         }
-        sThreadLocal.set(new Looper(quitAllowed));
+        sMainLooper = myLooper();
     }
+}
+```
+
+注意prepareMainLooper的注释，prepare只能调用一次，ActivityThread中已经调用过了，再调用到这里会报异常（12行）。到这里我们已经搞明白主线程中的looper是怎么来的。刚才遗留了一个问题ThreadLocal是怎么存取Loope，下面就来介绍下ThreadLocal。
+
+## 2.2、ThreadLocal
+
+先来看下ThreadLocal的set过程。
+
+```java
+class ThreadLocal<T> {  
+    // 省略...
+    public void set(T value) {
+        // 1、获取当前线程
+        Thread t = Thread.currentThread();
+        // 2、获取当前线程的ThreadMap对象
+        ThreadLocalMap map = getMap(t);
+        if (map != null)
+            // 2.1、map不为空存value到map中
+            map.set(this, value);
+        else
+            // 2.2、map为空则创建map并value存进去
+            createMap(t, value);
+    }
+                              
+    ThreadLocalMap getMap(Thread t) {
+        return t.threadLocals;
+    }  
     
-    private Looper(boolean quitAllowed) {
-        mQueue = new MessageQueue(quitAllowed);
-        mThread = Thread.currentThread();
+    void createMap(Thread t, T firstValue) {
+        t.threadLocals = new ThreadLocalMap(this, firstValue);
     }
 
-第5行 - 第15行可以看出，调用Looper.prepare过程中会将当前线程和Looper绑定在一起，所以不能直接在子线程中直接new Handler 会抛出异常  "Can't create handler inside thread that has not called Looper.prepare()"
-    
-    public Handler(Callback callback, boolean async) {
-        if (FIND_POTENTIAL_LEAKS) {
-            final Class<? extends Handler> klass = getClass();
-            if ((klass.isAnonymousClass() || klass.isMemberClass() || klass.isLocalClass()) &&
-                    (klass.getModifiers() & Modifier.STATIC) == 0) {
-                Log.w(TAG, "The following Handler class should be static or leaks might occur: " +
-                    klass.getCanonicalName());
+    static class ThreadLocalMap {
+        // ThreadLocalMap存储的值是弱引用
+        static class Entry extends WeakReference<ThreadLocal<?>> {
+            /** The value associated with this ThreadLocal. */
+            Object value;
+
+            Entry(ThreadLocal<?> k, Object v) {
+                super(k);
+                value = v;
             }
         }
-        mLooper = Looper.myLooper();
-        if (mLooper == null) {
-            throw new RuntimeException(
-                "Can't create handler inside thread that has not called Looper.prepare()");
-        }
-        mQueue = mLooper.mQueue;
-        mCallback = callback;
-        mAsynchronous = async;
+    
     }
+}
+```
 
-也就是说，new Hanlder 之前必须要调用 Looper.prepare方法，那为何在主线程中使用是不需要呢？
-其实Android在程序启动的时候，系统已经帮我们自动调用了Looper.prepare()方法。查看ActivityThread中的main()方法，代码如下所示：
+主要步骤有2点：
 
-    public static void main(String[] args) {
-        ...
-        Looper.prepareMainLooper();
-        ActivityThread thread = new ActivityThread();
-        thread.attach(false);
-        if (sMainThreadHandler == null) {
-            sMainThreadHandler = thread.getHandler();
-        }
-        if (false) {
-            Looper.myLooper().setMessageLogging(new
-                    LogPrinter(Log.DEBUG, "ActivityThread"));
-        }
-        // End of event ActivityThreadMain.
-        Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
-        Looper.loop();
-        ...
-    }
+1. 获取当前线程的ThreadMap对象 , ThreadMap其实是Thread的一个成员变量，但是是通过ThreadLocal来维护的。Thread.threadLocals为空时先创建。
 
-可以看到上面代码第3行调用了 Looper.prepareMainLooper()，再调用到Looper的prepare，最终将主线程和Lopper、Thread以及MessageQueue绑定在一起。    
-    public static void prepareMainLooper() {
-        prepare(false);
-        synchronized (Looper.class) {
-            if (sMainLooper != null) {
-                throw new IllegalStateException("The main Looper has already been prepared.");
+```ava
+/* ThreadLocal values pertaining to this thread. This map is maintained
+ * by the ThreadLocal class. */
+ThreadLocal.ThreadLocalMap threadLocals = null;
+```
+
+2. 将value值存到ThreadMap中，key是当前threadLocal对象，也就是说一个Thread可以存多个不同ThreadLocal的值，一个ThreadLocal只能存一个值。
+
+**总结一下：Looper通过prepare会初始化一个Looper对象，通过ThreadLocal将Thread和Looper对象绑定在一起。**
+
+我们再理解下Looper.myLooper对应的get过程，先获取线程的threadLocals（ThreadMap对象），再通过get（当前ThreadLocal对象）获取到。
+
+```java
+public static @Nullable Looper myLooper() {
+    return sThreadLocal.get();
+}
+class ThreadLocal<T> {  
+    public T get() {
+        Thread t = Thread.currentThread();
+        ThreadLocalMap map = getMap(t);
+        if (map != null) {
+            ThreadLocalMap.Entry e = map.getEntry(this);
+            if (e != null) {
+                @SuppressWarnings("unchecked")
+                T result = (T)e.value;
+                return result;
             }
-            sMainLooper = myLooper();
         }
+        return setInitialValue();
     }
     
-    public static @Nullable Looper myLooper() {
-        return sThreadLocal.get();
+    ThreadLocalMap getMap(Thread t) {
+        return t.threadLocals;
     }
+}
+```
 
-一个最标准的异步消息处理线程的写法应该是这样
+## 2.3、异步消息处理线程
+
+标准的子线程中异步消息分发机制
 
     class LooperThread extends Thread {  
           public Handler mHandler;  
@@ -312,9 +482,15 @@ Android UI是线程不安全的，如果在子线程中尝试进行UI操作，�
           }  
       }    
 
-这样基本就将Handler的创建过程完全搞明白了，总结一下就是在主线程中可以直接创建Handler对象，而在子线程中需要先调用Looper.prepare()才能创建Handler对象。
+Looper相关的介绍就到此为止，下面来细细分析下MessageQueue。
 
-## 五、Message 和 享元模式
+## 三、MessageQueue
+
+在Looper的介绍中，我们提到了MessageQueue
+
+
+
+## 四、Message 和 享元模式
 
 通常我们获取一个Message都是通过Message的obtain方法：
 
@@ -459,3 +635,26 @@ Looper和thread以及messageQueue都是一一对应的，而一个Handler只能�
 7.navtive层的原理。
 参考资料：
 http://blog.csdn.net/guolin_blog/article/details/9991569
+
+
+
+
+
+
+
+# MessageQueue
+
+整个Handler流程如上图，介绍原理前，我们先了解几个概念。
+
+- Handle 消息机制中作为一个对外暴露的工具，其内部包含了一个 Looper 。负责Message的发送及处理。Handler.sendMessage() ：向消息队列发送各种消息事件；Handler.handleMessage()：处理相应的消息事件
+- Looper 作为消息循环的核心，其内部包含了一个消息队列 MessageQueue ，用于记录所有待处理的消息；通过Looper.loop()不断地从MessageQueue中抽取Message，按分发机制将消息分发给目标处理者，可以看成是消息泵。注意，线程切换就是在这一步完成的。
+- MessageQueue 则作为一个消息队列，则包含了一系列链接在一起的 Message ；不要被这个Queue的名字给迷惑了，就以为它是一个队列，但其实内部通过单链表的数据结构来维护消息列表，等待Looper的抽取。
+- Message 则是消息体，内部又包含了一个目标处理器 target ，这个 target 正是最终处理它的 Handler。
+
+1、主线程中Looper.Loop的不会卡死？
+
+1、Looper.Loop会调用到MessageQueue.next()方法，没有消息时会阻塞在nativePollOnce，此时主线程会释放CPU进入休眠状态，并不会消耗CPU资源。直到有下个消息到达，这里依赖的是Linux pipe/epoll机制。
+
+2、ANR的原理，任务再特定时间内没有执行完。以Service ANR原理为例，首先startService之后，经过一系列的调用，最终会调用到AMS的startService相关方法，发送一个SERVICE_TIMEOUT_MSG的延时消息；紧接着再通过消息机制调用到ActivityThread.H.handleMessag中先执行Service的onCreate，再回到AMS找中，执行serviceDoneExecuting，移除SERVICE_TIMEOUT_MSG消息。也就是说如果onCreate执行时间过长导致SERVICE_TIMEOUT_MSG消息没有被及时移除，就会触发ANR。这里涉及到2个handler，一个ActivityThread，一个是AMS的，ActivityThread的Handler是和应用主线程绑定的；而AMS.MainHandler是SystemServer的ServerThread绑定的，用于处理service、process、provider的超时问题。另外input的超时处理过程并非发生在ActivityManager线程，而是inputDispatcher线程发生的。
+
+https://mp.weixin.qq.com/s/H8mHoYHyTe6oOaUwfYh6_g
