@@ -40,36 +40,38 @@ action等属性的定义在Manifest，导致了扩展性较差规则集中式管
 进行module分仓的配置可参考如下方式，注意必须要在每个使用到ARouter的module的buid.gradle文件中增加
 每个module都要配置的，为了应对单个module 分别编译的场景
 
-    // app.gradle 
-    annotationProcessorOptions {
-        arguments = [AROUTER_MODULE_NAME: project.getName(), AROUTER_GENERATE_DOC: "enable"]
-    }
-        
-    annotationProcessor 'com.alibaba:arouter-compiler:1.2.2'
+```java
+// app.gradle 
+annotationProcessorOptions {
+    arguments = [AROUTER_MODULE_NAME: project.getName(), AROUTER_GENERATE_DOC: "enable"]
+}
     
-    defaultConfig {
-        ...
-        // 用到ARouter的每个module中都必须加
-        javaCompileOptions {
-            annotationProcessorOptions {
-                arguments = [AROUTER_MODULE_NAME: project.getName()]
-            }
+annotationProcessor 'com.alibaba:arouter-compiler:1.2.2'
+
+defaultConfig {
+    ...
+    // 用到ARouter的每个module中都必须加
+    javaCompileOptions {
+        annotationProcessorOptions {
+            arguments = [AROUTER_MODULE_NAME: project.getName()]
         }
     }
-    
-    dependencies {
-        //  core 中已经编译了
-        implementation project(':core')
-        annotationProcessor 'com.alibaba:arouter-compiler:1.2.2'
-    }
-    
-    // core.gradle 
-    dependencies {
-        // gradle 3.0以上使用api 以下使用 compile 
-        api 'com.alibaba:arouter-api:1.4.1'
-        annotationProcessor 'com.alibaba:arouter-compiler:1.2.2'
-        api 'com.alibaba:fastjson:1.1.70.android'
-    }
+}
+
+dependencies {
+    //  core 中已经编译了
+    implementation project(':core')
+    annotationProcessor 'com.alibaba:arouter-compiler:1.2.2'
+}
+
+// core.gradle 
+dependencies {
+    // gradle 3.0以上使用api 以下使用 compile 
+    api 'com.alibaba:arouter-api:1.4.1'
+    annotationProcessor 'com.alibaba:arouter-compiler:1.2.2'
+    api 'com.alibaba:fastjson:1.1.70.android'
+}
+```
 
 [compile 和 implementation 的区别参考](https://blog.csdn.net/qijingwang/article/details/79805794)
 ### 1.3 混淆

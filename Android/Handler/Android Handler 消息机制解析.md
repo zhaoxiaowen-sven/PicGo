@@ -1,13 +1,13 @@
 
 
-# Handler消息机制
+# Android Handler消息机制
 
 Handler是Android中一种线程间传递消息的机制。主要应用的场景，将子线程中待更新的UI信息传递到主线程。本文将从以下几个方面介绍Handler：
 
-1. Handler的消息发送和接收 
+1. Handler的消息发送和分发过程
 2. Handler的工作原理
-3. Handler、Thread、Looper、
-4. Handler用法
+3. Handler、Thread、Looper三者的关系
+4. Handler一些不常见的用法。
 
 # 一、消息分发过程
 
@@ -487,28 +487,6 @@ class ThreadLocal<T> {
 
 **总结一下：Looper通过prepare会初始化一个Looper对象，通过ThreadLocal将Thread和Looper对象绑定在一起。Looper.loop会从MessageQueue中不断取出消息，进行分发。**
 
-## 2.3、异步消息处理线程
-
-标准的子线程中异步消息分发机制
-
-    class LooperThread extends Thread {  
-          public Handler mHandler;  
-      
-          public void run() {  
-              Looper.prepare();  
-      
-              mHandler = new Handler() {  
-                  public void handleMessage(Message msg) {  
-                      // process incoming messages here  
-                  }  
-              };  
-      
-              Looper.loop();  
-          }  
-      }    
-
-Looper相关的介绍就到此为止，下面来细细分析下MessageQueue。
-
 # 三、MessageQueue
 
 MessagQueue，顾名思义，消息队列，在Looper的介绍中，我们提到了MessageQueue其实是在Looper构造创建生成的，Handler中的mQueue其实就是Looper.mQueue，Looper和MessageQueue是一一对应的。
@@ -801,9 +779,307 @@ void recycleUnchecked() {
 总结一下：Message 通过在内部构建一个链表维护一个被回收的Message对象的对象池，当用户调用obtain函数时优先从池中获取，如果池中没有可以复用的对象则创建一个新的Message对象。这些新创建的Message对象再被使用完之后会被回收到这个对象池中，当下次再调用obtain函数时，他们就会被复用。
 结合的Looper.loop方法，在使用完一个Message对象后就将会将它回收，避免系统中创建太多Message对象。
 
-# 五、屏障消息和异步消息
+# 五、同步消息、屏障消息和异步消息
+
+在Handler构造函数，如果看到的足够仔细的话
+
+```java
+public Handler(@Nullable Callback callback, boolean async) 
+```
+
+我们会发现构造参数里有个async，异步？这个参数代表什么意思？
+
+其实在MessageQueue中消息有三种类型：同步消息，异步消息以及屏障消息。
+
+## 5.1、同步消息
+
+默认的消息类型，同步消息在MessageQueue里的存和取完全就是按照时间（msg.when）排序的。
+
+## 5.2、异步消息
+
+异步消息有2种构造方式：
+
+1. handler构造参数指定 async =true
+2. Message构造时，指定setAsynchronous（true）
+
+在sendMessage中，我们可以看到这2者的关系
+
+```java
+private boolean enqueueMessage(@NonNull MessageQueue queue, @NonNull Message msg,
+        long uptimeMillis) {
+    msg.target = this;
+    msg.workSourceUid = ThreadLocalWorkSource.getUid();
+	// mAsynchronous 就是构造参数中的 async 
+    if (mAsynchronous) {
+        msg.setAsynchronous(true);
+    }
+    return queue.enqueueMessage(msg, uptimeMillis);
+}
+```
+
+若Handler的构造参数中的async设置为true，该Handler所有的消息都会被设置为异步消息。
+
+## 5.3、屏障消息
+
+屏障(Barrier) 是一种特殊的Message，它最大的特征就是target为null(只有屏障的target可以为null，如果我们自己设置Message的target为null的话会报异常)，
+
+```java
+boolean enqueueMessage(Message msg, long when) {
+    if (msg.target == null) {
+        throw new IllegalArgumentException("Message must have a target.");
+    }
+}
+```
+
+并且arg1属性被用作屏障的标识符来区别不同的屏障。屏障的作用是用于拦截队列中同步消息，放行异步消息。
+
+那么屏障消息是怎么被添加和删除的呢？ 我们可以看到在MessageQueue里有添加和删除屏障消息的方法。
+
+```java
+private int postSyncBarrier(long when) {
+    // Enqueue a new sync barrier token.
+    // We don't need to wake the queue because the purpose of a barrier is to stall it.
+    synchronized (this) {
+        final int token = mNextBarrierToken++;
+        final Message msg = Message.obtain();
+        msg.markInUse();
+        msg.when = when;
+        msg.arg1 = token;
+
+        Message prev = null;
+        Message p = mMessages;
+         // 根据时间找到第一个比屏障消息晚的消息，将屏障消息插入到该消息之前；
+         // 屏障只会影响到队列中它之后的消息
+        if (when != 0) {
+            while (p != null && p.when <= when) {
+                prev = p;
+                p = p.next;
+            }
+        }
+        if (prev != null) { // invariant: p == prev.next
+            msg.next = p;
+            prev.next = msg;
+        } else {
+            // 如果prev是null,屏障消息插入到消息队列的头部
+            msg.next = p;
+            mMessages = msg;
+        }
+        return token;
+    }
+}
+
+ public void removeSyncBarrier(int token) {
+        // Remove a sync barrier token from the queue.
+        // If the queue is no longer stalled by a barrier then wake it.
+        synchronized (this) {
+            Message prev = null;
+            Message p = mMessages;
+        // 前面在插入屏障消息后会生成一个token，这个token就是用来删除该屏障消息用的。
+        // 所以这里通过判断target和token来找到该屏障消息，从而进行删除操作
+            while (p != null && (p.target != null || p.arg1 != token)) {
+                prev = p;
+                p = p.next;
+            }
+            if (p == null) {
+                throw new IllegalStateException("The specified message queue synchronization "
+                        + " barrier token has not been posted or has already been removed.");
+            }
+            final boolean needWake;
+            // 删除屏障消息，原理是链表的删除
+            if (prev != null) {
+                prev.next = p.next;
+                needWake = false;
+            } else {
+                mMessages = p.next;
+                needWake = mMessages == null || mMessages.target != null;
+            }
+            p.recycleUnchecked();
+
+            // If the loop is quitting then it is already awake.
+            // We can assume mPtr != 0 when mQuitting is false.
+            // 屏障消息删除后可再次之前的同步消息
+            if (needWake && !mQuitting) {
+                nativeWake(mPtr);
+            }
+        }
+    }
+```
+
+介绍完屏障消息的插入和删除，那么屏障消息的作用是什么？和同步及异步消息有何关系呢？ 我们可以看到MessageQueue的next方法里有这么一段：
+
+```java
+// 当前消息是屏障消息时（msg.target==null）, 如果存在屏障消息，那么在它之后进来的消息中，只放行异步消息
+if (msg != null && msg.target == null) {
+    // Stalled by a barrier.  Find the next asynchronous message in the queue.
+    do {
+        prevMsg = msg;
+        msg = msg.next;
+    } while (msg != null && !msg.isAsynchronous());
+}
+```
+
+插入屏障消息后，只放行队列中的异步消息，在Android系统里面为了更快响应UI刷新在**ViewRootImpl.scheduleTraversals**也有应用：
+
+```java
+    void scheduleTraversals() {
+        if (!mTraversalScheduled) {
+            mTraversalScheduled = true;
+            // 1、为主线程的MessageQueue设置了个消息屏障
+            mTraversalBarrier = mHandler.getLooper().getQueue().postSyncBarrier();
+            // 2、这里发送了个异步消息mTraversalRunnable，这个mTraversalRunnable最终会执行doTraversal(),也就是会触发View的绘制流程
+            mChoreographer.postCallback(
+                    Choreographer.CALLBACK_TRAVERSAL, mTraversalRunnable, null);
+     		
+        }
+    }
+    // postCallback 经过层层调用到这里Choreographer.postCallbackDelayedInternal
+    private void postCallbackDelayedInternal(int callbackType,
+            Object action, Object token, long delayMillis) {
+      		// 省略...
+            if (dueTime <= now) {
+                scheduleFrameLocked(now);
+            } else {
+                Message msg = mHandler.obtainMessage(MSG_DO_SCHEDULE_CALLBACK, action);
+                msg.arg1 = callbackType;
+                // 设置为异步消息
+                msg.setAsynchronous(true);
+                mHandler.sendMessageAtTime(msg, dueTime);
+            }
+    }
+```
+
+scheduleTraversals时通过设置屏障消息，会把主线程的同步消息先阻塞，优先执行View绘制这个异步消息进行界面绘制。让界面绘制的任务优先执行，避免出现界面卡顿。
+
+另外App层如果发送同步屏障postSyncBarrier需要反射才能使用，Android不建议使用，主线程中滥用的话就是和界面绘制抢资源了。
+
+```java
+  public void postSyncBarrier() {
+	   Method method = MessageQueue.class.getDeclaredMethod("postSyncBarrier");
+	   token = (int) method.invoke(Looper.getMainLooper().getQueue());
+   }
+
+   public void removeSyncBarrier() {
+	   Method method = MessageQueue.class.getDeclaredMethod("removeSyncBarrier", int.class);
+	    method.invoke(Looper.getMainLooper().getQueue(), token);}
+   }
+```
 
 # 六、IdleHandler
+
+IdleHandler，空闲的处理器（就是说我是在消息队列空闲的时候才会执行的，如果消息队列里有其他非IdleHandler消息在执行，则我先不执行），它其实就是一个接口，我们就认为它是空闲消息吧，只不过它不是存在MessageQueue里，而是以数组的形式保存的。
+
+```
+    /**
+     * Callback interface for discovering when a thread is going to block
+     * waiting for more messages.
+     */
+    public static interface IdleHandler {
+        /**
+         * Called when the message queue has run out of messages and will now
+         * wait for more.  Return true to keep your idle handler active, false
+         * to have it removed.  This may be called if there are still messages
+         * pending in the queue, but they are all scheduled to be dispatched
+         * after the current time.
+         */
+        boolean queueIdle();
+    }
+```
+
+MessageQueue有添加和删除IdleHandler的方法，IdleHandler被保存在一个ArrayList里：
+
+```java
+private final ArrayList<IdleHandler> mIdleHandlers = new ArrayList<IdleHandler>();
+
+...
+
+public void addIdleHandler(@NonNull IdleHandler handler) {
+    if (handler == null) {
+        throw new NullPointerException("Can't add a null IdleHandler");
+    }
+    synchronized (this) {
+        mIdleHandlers.add(handler);
+    }
+}
+
+public void removeIdleHandler(@NonNull IdleHandler handler) {
+    synchronized (this) {
+        mIdleHandlers.remove(handler);
+    }
+}
+```
+
+那么，它是怎么实现在消息队列空闲的间隙得到执行的呢？细心的同学应该注意到了，也是在MessageQueue.next()方法中。
+
+```java
+    Message next() {
+        // 省略...
+        // 1、这个参数很重要，控制
+        int pendingIdleHandlerCount = -1; // -1 only during first iteration
+
+        for (;;) {
+            if (nextPollTimeoutMillis != 0) {
+                Binder.flushPendingCommands();
+            }
+
+            nativePollOnce(ptr, nextPollTimeoutMillis);
+
+            synchronized (this) {
+              	// 省略...
+
+                // If first time idle, then get the number of idlers to run.
+                // Idle handles only run if the queue is empty or if the first message
+                // in the queue (possibly a barrier) is due to be handled in the future.
+                // 首次for循环 && 消息队列处于空闲 当前消息队列没有消息或者要执行的消息晚于当前时间
+                if (pendingIdleHandlerCount < 0
+                        && (mMessages == null || now < mMessages.when)) {
+                    // 赋值
+                    pendingIdleHandlerCount = mIdleHandlers.size();
+                }
+                if (pendingIdleHandlerCount <= 0) {
+                    // No idle handlers to run.  Loop and wait some more.
+                    mBlocked = true;
+                    continue;
+                }
+
+                if (mPendingIdleHandlers == null) {
+                    mPendingIdleHandlers = new IdleHandler[Math.max(pendingIdleHandlerCount, 4)];
+                }
+                mPendingIdleHandlers = mIdleHandlers.toArray(mPendingIdleHandlers);
+            }
+
+            // Run the idle handlers.
+            // We only ever reach this code block during the first iteration.
+            for (int i = 0; i < pendingIdleHandlerCount; i++) {
+                final IdleHandler idler = mPendingIdleHandlers[i];
+                mPendingIdleHandlers[i] = null; // release the reference to the handler
+
+                boolean keep = false;
+                try {
+                    // 如果queueIdle返回true，则该空闲消息不会被自动删除，在下次执行next的时候，如果还出现队列空闲，会再次执行。
+                    keep = idler.queueIdle();
+                } catch (Throwable t) {
+                    Log.wtf(TAG, "IdleHandler threw exception", t);
+                }
+
+                // 如果返回false，则该空闲消息会在执行完后，被自动删除掉。
+                if (!keep) {
+                    synchronized (this) {
+                        mIdleHandlers.remove(idler);
+                    }
+                }
+            }
+
+            // Reset the idle handler count to 0 so we do not run them again.
+            // 这里把空闲消息标志置为0，而不置为-1，防止一直执行；一直到下一次调用 MessageQueue.next() 方法.
+            pendingIdleHandlerCount = 0;
+            
+            // 当执行了 IdleHander 之后, 会消耗一段时间, 这时候消息队列里可能已经有消息到达可执行时间, 所以重置 nextPollTimeoutMillis 回去重新检查消息队列.
+            nextPollTimeoutMillis = 0;
+        }
+    }
+```
+
+总结一下：IdleHandler是在MessageQueuer队列空闲时执行的且只会执行一次，但如果将queueIdle的返回值改为true，会在每一次MessageQueue.next方法执行时在执行一次，也就是说如果队列中有新的消息到达就会再次执行。
 
 # 七、子线程中更新UI的方法
 
@@ -846,31 +1122,26 @@ public boolean post(Runnable action) {
    }
 ```
 
+# 八、常见问题
 
-
-## 总结：
-Looper和thread以及messageQueue都是一一对应的，而一个Handler只能关联一个Looper，一个Looper可以关联多个Handler, handler的messagequeue就是Looper的messagequeue。  
-
-这篇文章主要参考了郭霖大神的博客，按照自己的思路和理解写的，以下是自己还未搞懂的问题，欢迎讨论！
-
-问题：
-1.mCallback的用法？
-2.Handler(Callback callback, boolean async)  async 是什么意思，真正的异步，不添加队列？async 如果设置为true，那么不会通过队列发送消息？
-3.post 方式run里面不能做耗时任务？
-    会产生anr，post的Runnable是在主线程执行的。
-4.view.post 为何会在onCreate中执行时为何会无效？
-5.ThreadgetLocal.set 和 get的逻辑？
-6.不同的线程是不是使用相同的Message对象？
-7.navtive层的原理。
-参考资料：
-http://blog.csdn.net/guolin_blog/article/details/9991569
-
-
-
-1、主线程中Looper.Loop的不会卡死？
+## 8.1、主线程中Looper.Loop的不会卡死？
 
 1、Looper.Loop会调用到MessageQueue.next()方法，没有消息时会阻塞在nativePollOnce，此时主线程会释放CPU进入休眠状态，并不会消耗CPU资源。直到有下个消息到达，这里依赖的是Linux pipe/epoll机制。
 
 2、ANR的原理，任务再特定时间内没有执行完。以Service ANR原理为例，首先startService之后，经过一系列的调用，最终会调用到AMS的startService相关方法，发送一个SERVICE_TIMEOUT_MSG的延时消息；紧接着再通过消息机制调用到ActivityThread.H.handleMessag中先执行Service的onCreate，再回到AMS找中，执行serviceDoneExecuting，移除SERVICE_TIMEOUT_MSG消息。也就是说如果onCreate执行时间过长导致SERVICE_TIMEOUT_MSG消息没有被及时移除，就会触发ANR。这里涉及到2个handler，一个ActivityThread，一个是AMS的，ActivityThread的Handler是和应用主线程绑定的；而AMS.MainHandler是SystemServer的ServerThread绑定的，用于处理service、process、provider的超时问题。另外input的超时处理过程并非发生在ActivityManager线程，而是inputDispatcher线程发生的。
 
+## 总结：
+Looper和thread以及messageQueue都是一一对应的，而一个Handler只能关联一个Looper，一个Looper可以关联多个Handler, handler的messagequeue就是Looper的messagequeue。  
+
+
+参考资料：
+http://blog.csdn.net/guolin_blog/article/details/9991569
+
+https://juejin.cn/post/6844904068129751047
+
 https://mp.weixin.qq.com/s/H8mHoYHyTe6oOaUwfYh6_g
+
+https://mp.weixin.qq.com/s/71OV_K7YJas7pLtsPY-jeQ
+
+
+
