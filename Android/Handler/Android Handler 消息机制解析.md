@@ -116,7 +116,7 @@ Handler handler1 = new Handler(new Handler.Callback() {
 });
 ```
 
-## 1.2、消息入队
+## 1.2、发送消息
 
 sendMessageAtTime后发生了什么？继续分析sendMessageAtTime方法
 
@@ -211,11 +211,11 @@ boolean enqueueMessage(Message msg, long when) {
 
 22 - 24行：对收到的消息按发送时间进行排序，如果当前消息不需要延时，放到头部；若是延时消息，则根据发送时间放到队列合适位置。
 
-总结一下：**sendMessage就是讲消息加到MessageQueue的队列中**。
+**总结一下：sendMessage就是讲消息加到MessageQueue的队列中。**
 
 至此，消息的发送过程全部结束了，什么！那消息是怎么分发的呢？我们先给出答案，是通过Looper.loop。
 
-## 1.3、消息出队
+## 1.3、消息分发
 
 刚才说了Handler的消息分发是通过Looper.loop，接下来看下代码，上车！
 
@@ -286,13 +286,7 @@ public void dispatchMessage(@NonNull Message msg) {
 
 好了，Handler的消息分发机制就介绍完了。如果只是想简单了解下Handler机制，到这里就可以了。
 
-就这？当然不！上述介绍过程中涉及到几个概念Looper，MessageQueue，还没详细说呢？我们先来看下Handler涉及到的几个概念。
-
-- Looper 作为消息循环的核心，其内部包含了一个消息队列 MessageQueue ，用于记录所有待处理的消息；通过Looper.loop()不断地从MessageQueue中抽取Message，按分发机制将消息分发给目标处理者，可以看成是消息泵。注意，线程切换就是在这一步完成的。
-- MessageQueue 则作为一个消息队列，则包含了一系列链接在一起的 Message ；不要被这个Queue的名字给迷惑了，就以为它是一个队列，但其实内部通过单链表的数据结构来维护消息列表，等待Looper的抽取。
-- Message 则是消息体，内部又包含了一个目标处理器 target ，这个 target 正是最终处理它的 Handler。
-
-下面先来看下Looper。
+就这？当然不！上述介绍过程中涉及到几个概念Looper，MessageQueue，还没详细说呢？我们先来看下Looper。
 
 # 二、Looper
 
@@ -377,9 +371,9 @@ public static void main(String[] args) {
 }
 ```
 
-3行:调用了 Looper.prepareMainLooper()，再调用到Looper的prepare。
+3行：调用了 Looper.prepareMainLooper()，再调用到Looper的prepare。
 
-14行：Looper.looper，开启循环，不停取出消息。
+14行：**Looper.looper，开启循环，不停取出消息。主线程中其实先开启循环不停取消息，再才是发送消息。**
 
 ```java
 /**
@@ -508,7 +502,7 @@ public Handler(@Nullable Callback callback, boolean async) {
 
 在前面章节我们讲了sengMessage最终会调用到MessageQueue.enqueueMessage，下面具体分析enqueueMessage的代码。
 
-## 3.1、enqueueMessage
+## 3.1、消息入队
 
 关于enqueueMessage消息入队逻辑在1.2节已经介绍过了；除此之外，消息加入队列时，两种情况会唤醒looper.loop，为什么要唤醒，后面再说：
 
@@ -555,9 +549,9 @@ public Handler(@Nullable Callback callback, boolean async) {
     }
 ```
 
-## 3.2、next
+## 3.2、消息出队
 
-在1.3节我们介绍过Looper.Looper负责消息出队，通过Queue.next()取队列中的消息。
+在1.3节我们介绍过Looper.Looper负责消息出队，其实是通过Queue.next()取队列中的消息。
 
 ```java
 Message next() {    
@@ -1081,10 +1075,13 @@ public void removeIdleHandler(@NonNull IdleHandler handler) {
 
 总结一下：IdleHandler是在MessageQueuer队列空闲时执行的且只会执行一次，但如果将queueIdle的返回值改为true，会在每一次MessageQueue.next方法执行时在执行一次，也就是说如果队列中有新的消息到达就会再次执行。
 
-# 七、子线程中更新UI的方法
+# 七、常见问题
+
+## 7.1、子线程中更新UI的方法
 
 除了Handler的sendMessage和post之外，我们还有以下2种方法可以在子线程中进行UI操作，一句话解释完，请看注释！！！
-## 7.1、View的post()方法
+
+### 7.1.1、View的post()方法
 
 ```java
 /**
@@ -1103,7 +1100,8 @@ public boolean post(Runnable action) {
     return true;
 }
 ```
-## 7.2、Activity的runOnUiThread()方法
+
+### 7.1.2、Activity的runOnUiThread()方法
 
 ```java
 /**
@@ -1122,16 +1120,18 @@ public boolean post(Runnable action) {
    }
 ```
 
-# 八、常见问题
-
-## 8.1、主线程中Looper.Loop的不会卡死？
+## 7.2、主线程中Looper.Loop的不会卡死？
 
 1、Looper.Loop会调用到MessageQueue.next()方法，没有消息时会阻塞在nativePollOnce，此时主线程会释放CPU进入休眠状态，并不会消耗CPU资源。直到有下个消息到达，这里依赖的是Linux pipe/epoll机制。
 
 2、ANR的原理，任务再特定时间内没有执行完。以Service ANR原理为例，首先startService之后，经过一系列的调用，最终会调用到AMS的startService相关方法，发送一个SERVICE_TIMEOUT_MSG的延时消息；紧接着再通过消息机制调用到ActivityThread.H.handleMessag中先执行Service的onCreate，再回到AMS找中，执行serviceDoneExecuting，移除SERVICE_TIMEOUT_MSG消息。也就是说如果onCreate执行时间过长导致SERVICE_TIMEOUT_MSG消息没有被及时移除，就会触发ANR。这里涉及到2个handler，一个ActivityThread，一个是AMS的，ActivityThread的Handler是和应用主线程绑定的；而AMS.MainHandler是SystemServer的ServerThread绑定的，用于处理service、process、provider的超时问题。另外input的超时处理过程并非发生在ActivityManager线程，而是inputDispatcher线程发生的。
 
-## 总结：
-Looper和thread以及messageQueue都是一一对应的，而一个Handler只能关联一个Looper，一个Looper可以关联多个Handler, handler的messagequeue就是Looper的messagequeue。  
+# 总结：
+
+- Looper 作为消息循环的核心，其内部包含了一个消息队列 MessageQueue ，用于记录所有待处理的消息；Handler通过sendMessage添加消息，通过Looper.loop()不断地从MessageQueue中抽取Message，按分发机制将消息分发给目标处理者，可以看成是消息泵。注意，线程切换就是在这一步完成的。
+- MessageQueue 则作为一个消息队列，则包含了一系列链接在一起的 Message ；不要被这个Queue的名字给迷惑了，就以为它是一个队列，但其实内部通过单链表的数据结构来维护消息列表，等待Looper的抽取。
+- Message 则是消息体，内部又包含了一个目标处理器 target ，这个 target 正是最终处理它的 Handler。
+- **Looper和Thread以及MessageQueue是一一对应的**，**而一个Handler只能关联一个Looper，一个Looper可以关联多个Handler**, Handler的messagequeue就是Looper的messagequeue。  
 
 
 参考资料：
