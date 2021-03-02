@@ -1,22 +1,29 @@
-## 1.为什么要使用线程池？
-Android中处理耗时任务时通常都需要开启线程去处理，通过Thread 或者 Runnabe方式开启的大量的线程，会导致系统的性能表现的非常糟糕。
+## 一、为什么要使用线程池？
+平时讨论多线程处理，大佬们必定会说使用线程池，那为什么要使用线程池？其实，这个问题可以反过来思考一下，不使用线程池会怎么样？
 
-1、线程的创建和销毁都需要时间，当有大量的线程创建和销毁时，那么这些时间的消耗则比较明显，将导致性能上的缺失
-        
-2、大量的线程创建、执行和销毁是非常耗cpu和内存的，这样将直接影响系统的吞吐量，导致性能急剧下降，如果内存资源占用的比较多，还很可能造成OOM
-        
-3、大量的线程的创建和销毁很容易导致GC频繁的执行，从而发生内存抖动现象，而发生了内存抖动，对于移动端来说，最大的影响就是造成界面卡顿    
+- 当需要多线程并发执行任务时，只能不断的通过new Thread创建线程，每创建一个线程都需要在堆上分配内存空间，同时需要分配虚拟机栈、本地方法栈、程序计数器等线程私有的内存空间。
+- 当这个线程对象被可达性分析算法标记为不可用时被GC回收，这样频繁的创建和回收需要大量的额外开销。
+- 再者说，JVM的内存资源是有限的，如果系统中大量的创建线程对象，JVM很可能直接抛出OutOfMemoryError异常，还有大量的线程去竞争CPU会产生其他的性能开销，更多的线程反而会降低性能，所以必须要限制线程数。
 
-## 2.ExecutorService 
-通过上述分析，我们知道了通过new Thread().start()方式创建线程去处理任务的弊端，而为了解决这些问题，Java为我们提供了ExecutorService线程池来优化和管理线程的使用。ExecutorService，是一个接口，其实如果要从真正意义上来说，它可以叫做线程池的服务，因为它提供了众多接口api来控制线程池中的线程，而真正意义上的线程池就是：ThreadPoolExecutor，它实现了ExecutorService接口，并封装了一系列的api使得它具有线程池的特性，其中包括工作队列、核心线程数、最大线程数等。
-**使用线程池的优点**
-1、线程的创建和销毁由线程池维护，一个线程在完成任务后并不会立即销毁，而是由后续的任务复用这个线程，从而减少线程的创建和销毁，节约系统的开销
-2、线程池旨在线程的复用，这就可以节约我们用以往的方式创建线程和销毁所消耗的时间，减少线程频繁调度的开销，从而节约系统资源，提高系统吞吐量
-3、在执行大量异步任务时提高了性能
+**使用线程池有哪些好处：**
 
-## 3.ThreadPoolExecutor
+- **降低资源消耗**：线程池可以复用池中的线程，不需要每次都创建新线程，减少创建和销毁线程的开销。
+- **提高响应速度**：任务到达时，无需等待线程创建即可立即执行。
+- **提高线程的可管理性**：线程是稀缺资源，如果无限制创建，不仅会消耗系统资源，还会因为线程的不合理分布导致资源调度失衡，降低系统的稳定性。使用线程池可以进行统一的分配、调优和监控。
+- **线程池可实现线程环境的隔离**，例如分别定义支付功能相关线程池和优惠券功能相关线程池，当其中一个运行有问题时不会影响另一个。
+- **提供更多更强大的功能**：线程池具备可拓展性，允许开发人员向其中增加更多的功能。比如延时定时线程池ScheduledThreadPoolExecutor，就允许任务延期执行或定期执行。
+
+## 二、ThreadPoolExecutor
+
+1、7大核心参数
+
+2、
+
+
+
 既然线程池就是ThreadPoolExecutor，所以我们要创建一个线程池只需要new ThreadPoolExecutor(…);就可以创建一个线程池，而如果这样创建线程池的话，我们需要配置一堆东西，非常麻烦，我们可以看一下它的构造方法就知道了：
     
+
     public ThreadPoolExecutor(int corePoolSize,
                               int maximumPoolSize,
                               long keepAliveTime,
@@ -28,46 +35,9 @@ Android中处理耗时任务时通常都需要开启线程去处理，通过Thre
 
 所以，官方也不推荐使用这种方法来创建线程池，而是推荐使用Executors的工厂方法来创建线程池，Executors类是官方提供的一个工厂类，它里面封装好了众多功能不一样的线程池，从而使得我们创建线程池非常的简便，主要提供了如下五种功能不一样的线程池：
     
-### 1、newFixedThreadPool
-该模式全部由核心线程去实现，并不会被回收，没有超时限制和任务队列的限制，会创建一个定长线程池，可控制线程最大并发数，超出的线程会在队列中等待。
-        
-    ExecutorService fixedThreadPool = Executors.newFixedThreadPool(5);
 
-### 2、newCachedThreadPool
-该模式下线程数量不定的线程池，只有非核心线程，最大值为Integer.MAX_VALUE，会创建一个可缓存线程池，如果线程池长度超过处理需要，可灵活回收空闲线程，若无可回收，则新建线程。
+.ThreadPoolExecutor解析
 
-      ExecutorService cachedThreadPool = Executors.newCachedThreadPool();
-
-### 3、newSingleThreadExecutor
-该模式下线程池内部只有一个核心线程，所有的任务都在一个线程中执行，会创建一个单线程化的线程池，它只会用唯一的工作线程来执行任务，保证所有任务按照指定顺序(FIFO, LIFO, 优先级)执行。实现代码如下：
-
-    ExecutorService singleThreadPool = Executors.newSingleThreadExecutor();
-
-### 4、newScheduledThreadPool
-该模式下核心线程是固定的，非核心线程没有限制，非核心线程闲置时会被回收。会创建一个定长线程池，执行定时任务和固定周期的任务。
-
-      ScheduledExecutorService scheduledThreadPool = Executors.newScheduledThreadPool(5);
-
-### 5、newSingleThreadScheduledExecutor()
-该模式下返回一个可以控制线程池内线程定时或周期性执行某任务的线程池。只不过和上面的区别是该线程池大小为1，而上面的可以指定线程池的大小
-    
-    ScheduledExecutorService singleThreadScheduledPool = Executors.newSingleThreadScheduledExecutor();
-
-#### ScheduledExecutorService可调用方法的说明
-    1.schedule(Runnable command, long delay, TimeUnit unit)
-    延迟delay时间后执行，只执行一次。
-             
-    2.scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnitunit)
-    if(线程执行时间＞period）
-        执行周期 = 线程执行时间。
-     else
-        执行周期 = period（延迟）。
-        
-    3.scheduleWithFixedDelay(Runnable command, long initialDelay, long delay,TimeUnit unit)
-    执行周期 = 线程执行时间+delay
-
-
-## 4.ThreadPoolExecutor解析
 我们看到通过Executors的工厂方法来创建线程池极其简便，其实它的内部还是通过new ThreadPoolExecutor(…)的方式创建线程池的，所以我们要了解线程池还是得了解ThreadPoolExecutor这个线程池类，其中由于和定时任务相关的线程池比较特殊（newScheduledThreadPool()、newSingleThreadScheduledExecutor()），它们创建的线程池内部实现是由ScheduledThreadPoolExecutor这个类实现的，而ScheduledThreadPoolExecutor是继承于ThreadPoolExecutor扩展而成的，所以本质还是一样的，只不过多封装了一些定时任务相关的api，所以我们主要就是要了解ThreadPoolExecutor，从构造方法开始：
 
     public ThreadPoolExecutor(int corePoolSize,
@@ -143,7 +113,80 @@ workQueue：任务队列，主要用来存储已经提交但未被执行的任�
 
 单次可执行任务数：maximumPoolSize
 
+
+
+## 三、ExecutorService 
+
+通过上述分析，我们知道了通过new Thread().start()方式创建线程去处理任务的弊端，而为了解决这些问题，Java为我们提供了ExecutorService线程池来优化和管理线程的使用。ExecutorService，是一个接口，其实如果要从真正意义上来说，它可以叫做线程池的服务，因为它提供了众多接口api来控制线程池中的线程，而真正意义上的线程池就是：ThreadPoolExecutor，它实现了ExecutorService接口，并封装了一系列的api使得它具有线程池的特性，其中包括工作队列、核心线程数、最大线程数等。
+**使用线程池的优点**
+1、线程的创建和销毁由线程池维护，一个线程在完成任务后并不会立即销毁，而是由后续的任务复用这个线程，从而减少线程的创建和销毁，节约系统的开销
+2、线程池旨在线程的复用，这就可以节约我们用以往的方式创建线程和销毁所消耗的时间，减少线程频繁调度的开销，从而节约系统资源，提高系统吞吐量
+3、在执行大量异步任务时提高了性能
+
+### 1、newFixedThreadPool
+
+该模式全部由核心线程去实现，并不会被回收，没有超时限制和任务队列的限制，会创建一个定长线程池，可控制线程最大并发数，超出的线程会在队列中等待。
+        
+
+```java
+ExecutorService fixedThreadPool = Executors.newFixedThreadPool(5);
+```
+
+### 2、newCachedThreadPool
+
+该模式下线程数量不定的线程池，只有非核心线程，最大值为Integer.MAX_VALUE，会创建一个可缓存线程池，如果线程池长度超过处理需要，可灵活回收空闲线程，若无可回收，则新建线程。
+
+```java
+  ExecutorService cachedThreadPool = Executors.newCachedThreadPool();
+```
+
+### 3、newSingleThreadExecutor
+
+该模式下线程池内部只有一个核心线程，所有的任务都在一个线程中执行，会创建一个单线程化的线程池，它只会用唯一的工作线程来执行任务，保证所有任务按照指定顺序(FIFO, LIFO, 优先级)执行。实现代码如下：
+
+```java
+ExecutorService singleThreadPool = Executors.newSingleThreadExecutor();
+```
+
+### 4、newScheduledThreadPool
+
+该模式下核心线程是固定的，非核心线程没有限制，非核心线程闲置时会被回收。会创建一个定长线程池，执行定时任务和固定周期的任务。
+
+```java
+  ScheduledExecutorService scheduledThreadPool = Executors.newScheduledThreadPool(5);
+```
+
+### 5、newSingleThreadScheduledExecutor()
+
+该模式下返回一个可以控制线程池内线程定时或周期性执行某任务的线程池。只不过和上面的区别是该线程池大小为1，而上面的可以指定线程池的大小
+    
+
+```java
+ScheduledExecutorService singleThreadScheduledPool = Executors.newSingleThreadScheduledExecutor();
+```
+
+#### ScheduledExecutorService可调用方法的说明
+
+```java
+1.schedule(Runnable command, long delay, TimeUnit unit)
+延迟delay时间后执行，只执行一次。
+         
+2.scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnitunit)
+if(线程执行时间＞period）
+    执行周期 = 线程执行时间。
+ else
+    执行周期 = period（延迟）。
+    
+3.scheduleWithFixedDelay(Runnable command, long initialDelay, long delay,TimeUnit unit)
+执行周期 = 线程执行时间+delay
+```
+
+## 
+
+
+
 ## 5.线程池其他常用功能
+
 1.shutDown()  关闭线程池，不影响已经提交的任务
 2.shutDownNow() 关闭线程池，并尝试去终止正在执行的线程
 3.allowCoreThreadTimeOut(boolean value) 允许核心线程闲置超时时被回收
@@ -187,3 +230,7 @@ workQueue：任务队列，主要用来存储已经提交但未被执行的任�
 参考资料：
 http://blog.csdn.net/u010687392/article/details/49850803
 《Android开发艺术探索》
+
+https://www.cnblogs.com/franson-2016/p/13291591.html
+
+https://www.cnblogs.com/zhangziqiu/archive/2011/03/30/ComputerCode.html
