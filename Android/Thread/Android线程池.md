@@ -1,4 +1,7 @@
-## 一、为什么要使用线程池？
+ThreadPoolExecutor 线程池原理
+
+# 一、为什么要使用线程池？
+
 平时讨论多线程处理，大佬们必定会说使用线程池，那为什么要使用线程池？其实，这个问题可以反过来思考一下，不使用线程池会怎么样？
 
 - 当需要多线程并发执行任务时，只能不断的通过new Thread创建线程，每创建一个线程都需要在堆上分配内存空间，同时需要分配虚拟机栈、本地方法栈、程序计数器等线程私有的内存空间。
@@ -13,9 +16,11 @@
 - **线程池可实现线程环境的隔离**，例如分别定义支付功能相关线程池和优惠券功能相关线程池，当其中一个运行有问题时不会影响另一个。
 - **提供更多更强大的功能**：线程池具备可拓展性，允许开发人员向其中增加更多的功能。比如延时定时线程池ScheduledThreadPoolExecutor，就允许任务延期执行或定期执行。
 
-## 二、ThreadPoolExecutor
+Java中的线程池核心实现类是ThreadPoolExecutor，下面来分析下它的基本原理。
 
-# 2.1、7大核心参数
+# 二、7大核心参数
+
+ThreadPoolExecutor定义了七大核心属性，这些属性是线程池实现的基石。
 
 ```java
 public ThreadPoolExecutor(int corePoolSize,
@@ -41,50 +46,130 @@ public ThreadPoolExecutor(int corePoolSize,
 }
 ```
 
-1、corePoolSize ， maximumPoolSize
+1. **coreSize**
 
-2、keepAliveTime & TimeUnit unit
+   默认情况下，在创建了线程池后，线程池中的线程数为0，当有任务来之后，就会创建一个线程去执行任务，当线程池中的线程数目达到corePoolSize后，就会把到达的任务放到任务队列当中。线程池将长期保证这些线程处于存活状态，即使线程已经处于闲置状态。除非配置了allowCoreThreadTimeOut=true，核心线程数的线程也将不再保证长期存活于线程池内，在空闲时间超过keepAliveTime后被销毁。
 
-3、workQueue
+2. **maximumPoolSize**
 
-4、threadFactory
+   线程池内的最大线程数量，线程池内维护的线程不得超过该数量，大于核心线程数量小于最大线程数量的线程将在空闲时间超过keepAliveTime后被销毁。当阻塞队列存满后，将会创建新线程执行任务，线程的数量不会大于maximumPoolSize。maximumPoolSize的上限是
 
-5、handler
+$$
+2^n -1 (n = 29)
+$$
 
-# 2.2、工作机制
+3. **keepAliveTime** 
 
-## 1、execute
+   存活时间，若线程数超过了corePoolSize，线程闲置时间超过了存活时间，该线程将被销毁。除非配置了allowCoreThreadTimeOut=true，核心线程数的线程也将不再保证长期存活于线程池内，在空闲时间超过keepAliveTime后被销毁。
+
+4. **unit**
+
+   线程存活时间的单位，例如TimeUnit.SECONDS表示秒。
+
+5. **workQueue**
+
+   线程池中保存等待执行的任务的阻塞队列。通过execute方法提交的Runable对象都会“存储”在该队列中，能够通过实现BlockingQueue接口来自定义我们所需要的阻塞队列
+
+6. **threadFactory**
+
+   创建线程的工厂，默认是DefaultThreadFactory，可以定义线程名称，分组，优先级等。
+
+7. **RejectedExecutionHandler**
+
+   拒绝策略（饱和策略），当任务队列存满并且线程池个数达到maximunPoolSize后采取的策略。ThreadPoolExecutor中提供了四种拒绝策略。
+
+   | 可选值              | 说明                                                   |
+   | ------------------- | ------------------------------------------------------ |
+   | AbortPolicy         | 直接抛出RejectedExecutionException异常，默认拒绝策略。 |
+   | DiscardPolicy       | 不进行处理也不抛出异常。                               |
+   | DiscardOldestPolicy | 丢弃队列里最前的任务，执行当前任务。                   |
+   | CallerRunsPolicy    | 由调用线程执行该任务。                                 |
+
+# 三、工作原理
+
+ThreadPoolExecutor运行机制如下图所示：
+
+![image-20210304172819822](../../pics/image-20210304172819822.png)
+
+线程池在内部实际上构建了一个生产者消费者模型，将线程和任务两者解耦，并不直接关联，从而良好的缓冲任务，复用线程。线程池的运行主要分成两部分：任务管理、线程管理。
+
+- 任务管理部分充当生产者的角色，当任务提交后，线程池会判断该任务后续的流转：（1）直接申请线程执行该任务；（2）缓冲到队列中等待线程执行；（3）拒绝该任务。
+
+- 线程管理部分是消费者，它们被统一维护在线程池内，根据任务请求进行线程的分配，当线程执行完任务后则会继续获取新的任务去执行，最终当线程获取不到任务的时候，线程就会被回收。
+
+我们会按照以下三个部分去详细讲解线程池运行机制：
+
+1. 线程池如何维护自身状态。
+2. 线程池如何管理任务。
+3. 线程池如何管理线程。
+
+## 3.1、线程池状态管理
+
+线程池内部使用一个变量**ctl**维护运行状态(runState)和线程数量 (workerCount)，是一个32位二进制数，其中前3位表示线程池状态，后29位表示线程数。
+
+```java
+private final AtomicInteger ctl = new AtomicInteger(ctlOf(RUNNING, 0));
+private static final int COUNT_BITS = Integer.SIZE - 3;
+private static final int CAPACITY   = (1 << COUNT_BITS) - 1;
+// runState is stored in the high-order bits
+private static final int RUNNING    = -1 << COUNT_BITS;
+private static final int SHUTDOWN   =  0 << COUNT_BITS;
+private static final int STOP       =  1 << COUNT_BITS;
+private static final int TIDYING    =  2 << COUNT_BITS;
+private static final int TERMINATED =  3 << COUNT_BITS;
+// Packing and unpacking ctl
+private static int runStateOf(int c)     { return c & ~CAPACITY; }
+private static int workerCountOf(int c)  { return c & CAPACITY; }
+private static int ctlOf(int rs, int wc) { return rs | wc; }
+```
+
+线程池状态：
+
+| 状态       | 前3位值 | 描述                                                         |
+| ---------- | ------- | ------------------------------------------------------------ |
+| RUNNING    | 111     | 能接受新提交的任务，也能处理阻塞队列中的任务。               |
+| SHUTDOWN   | 000     | 关闭状态，不再接受新提交的任务，单可以继续执行已添加到阻塞队列中的任务。 |
+| STOP       | 001     | 不能接受新任务，也不能处理队列中的任务，会中断正在执行的任务的线程。 |
+| TIDYING    | 010     | 所有的任务都已经终止，workerCount（有效线程数）为0           |
+| TERMINATED | 011     | 在terminated()方法执行完后进入该状态                         |
+
+生命周期的转换如下图：
+
+![image-20210304172419652](../../pics/image-20210304172419652.png)
+
+
+
+线程池运行的状态，并不是用户显式设置的，而是伴随着线程池的运行，由内部来维护。
+
+## 3.2、任务管理
+
+### 3.2.1、任务提交
+
+向线程池中提交一个任务后，线程池的处理流程如下：
+
+![image-20210304164400691](../../pics/image-20210304164400691.png)
+
+1. 如果线程池中的数量未达到核心线程的数量，则直接会启动一个核心线程来执行任务。
+2. 如果线程池中的数量已经达到或超过核心线程的数量，则任务会被插入到任务队列中等待执行。
+
+3. 如果任务队列已满，且线程数未达到最大线程数，则会启动一个非核心线程来执行任务。
+
+4. 如果线程数已达到最大值，按照饱和策略执行该任务。
+
+具体代码实现execute方法中：
 
 ```java
 public void execute(Runnable command) {
     if (command == null)
         throw new NullPointerException();
-    /*
-     * Proceed in 3 steps:
-     *
-     * 1. If fewer than corePoolSize threads are running, try to
-     * start a new thread with the given command as its first
-     * task.  The call to addWorker atomically checks runState and
-     * workerCount, and so prevents false alarms that would add
-     * threads when it shouldn't, by returning false.
-     *
-     * 2. If a task can be successfully queued, then we still need
-     * to double-check whether we should have added a thread
-     * (because existing ones died since last checking) or that
-     * the pool shut down since entry into this method. So we
-     * recheck state and if necessary roll back the enqueuing if
-     * stopped, or start a new thread if there are none.
-     *
-     * 3. If we cannot queue task, then we try to add a new
-     * thread.  If it fails, we know we are shut down or saturated
-     * and so reject the task.
-     */
     int c = ctl.get();
     if (workerCountOf(c) < corePoolSize) {
+        // 1、如果线程池中的数量未达到核心线程的数量，则直接会启动一个核心线程来执行任务
         if (addWorker(command, true))
             return;
         c = ctl.get();
     }
+    // 2、如果线程池中的数量已经达到或超过核心线程的数量，则任务会被插入到任务队列中等待执行
     if (isRunning(c) && workQueue.offer(command)) {
         int recheck = ctl.get();
         if (! isRunning(recheck) && remove(command))
@@ -92,14 +177,26 @@ public void execute(Runnable command) {
         else if (workerCountOf(recheck) == 0)
             addWorker(null, false);
     }
+    // 3、如果任务队列已满，且线程数未达到最大线程数，则会启动一个非核心线程来执行任务。
     else if (!addWorker(command, false))
+        // 4、如果线程数已达到最大值，按照饱和策略执行该任务。
         reject(command);
 }
 ```
 
+### 3.2.2、任务缓冲
 
+任务缓冲模块是线程池能够管理任务的核心部分，依靠阻塞队列（BlockingQueue）来实现。任务先提交到阻塞队列中，再由工作线程从阻塞队列中获取任务。
 
-## 2、addWorker
+![image-20210304182153087](../../pics/image-20210304182153087.png)
+
+使用不同的队列可以实现不一样的任务存取策略，常见的阻塞队列有：
+
+![image-20210304161843818](../../pics/image-20210304161843818.png)
+
+## 3.3、Worker线程管理
+
+## 1、addWorker
 
 ```java
 private boolean addWorker(Runnable firstTask, boolean core) {
@@ -170,6 +267,8 @@ private boolean addWorker(Runnable firstTask, boolean core) {
 }
 ```
 
+2 - 26行：检查线程状态，尝试增加线程
+
 ## 3、worker
 
 ```java
@@ -177,18 +276,10 @@ private final class Worker
     extends AbstractQueuedSynchronizer
     implements Runnable
 {
-    /**
-     * This class will never be serialized, but we provide a
-     * serialVersionUID to suppress a javac warning.
-     */
-    private static final long serialVersionUID = 6138294804551838833L;
-
     /** Thread this worker is running in.  Null if factory fails. */
     final Thread thread;
     /** Initial task to run.  Possibly null. */
     Runnable firstTask;
-    /** Per-thread task counter */
-    volatile long completedTasks;
 
     /**
      * Creates with given first task and thread from ThreadFactory.
@@ -197,6 +288,7 @@ private final class Worker
     Worker(Runnable firstTask) {
         setState(-1); // inhibit interrupts until runWorker
         this.firstTask = firstTask;
+        // 重点在这里
         this.thread = getThreadFactory().newThread(this);
     }
 
@@ -298,48 +390,12 @@ private Runnable getTask() {
 }
 ```
 
-所以，官方也不推荐使用这种方法来创建线程池，而是推荐使用Executors的工厂方法来创建线程池，Executors类是官方提供的一个工厂类，它里面封装好了众多功能不一样的线程池，从而使得我们创建线程池非常的简便，主要提供了如下五种功能不一样的线程池：
-    
 
-.ThreadPoolExecutor解析
 
-我们看到通过Executors的工厂方法来创建线程池极其简便，其实它的内部还是通过new ThreadPoolExecutor(…)的方式创建线程池的，所以我们要了解线程池还是得了解ThreadPoolExecutor这个线程池类，其中由于和定时任务相关的线程池比较特殊（newScheduledThreadPool()、newSingleThreadScheduledExecutor()），它们创建的线程池内部实现是由ScheduledThreadPoolExecutor这个类实现的，而ScheduledThreadPoolExecutor是继承于ThreadPoolExecutor扩展而成的，所以本质还是一样的，只不过多封装了一些定时任务相关的api，所以我们主要就是要了解ThreadPoolExecutor，从构造方法开始：
+​    
 
-    public ThreadPoolExecutor(int corePoolSize,
-                              int maximumPoolSize,
-                              long keepAliveTime,
-                              TimeUnit unit,
-                              BlockingQueue<Runnable> workQueue) {
-        this(corePoolSize, maximumPoolSize, keepAliveTime, unit, workQueue,
-             Executors.defaultThreadFactory(), defaultHandler);
-    }
-    
-    public ThreadPoolExecutor(int corePoolSize,
-                              int maximumPoolSize,
-                              long keepAliveTime,
-                              TimeUnit unit,
-                              BlockingQueue<Runnable> workQueue,
-                              ThreadFactory threadFactory,
-                              RejectedExecutionHandler handler) {
-        if (corePoolSize < 0 ||
-            maximumPoolSize <= 0 ||
-            maximumPoolSize < corePoolSize ||
-            keepAliveTime < 0)
-            throw new IllegalArgumentException();
-        if (workQueue == null || threadFactory == null || handler == null)
-            throw new NullPointerException();
-        this.corePoolSize = corePoolSize;
-        this.maximumPoolSize = maximumPoolSize;
-        this.workQueue = workQueue;
-        this.keepAliveTime = unit.toNanos(keepAliveTime);
-        this.threadFactory = threadFactory;
-        this.handler = handler;
-    } 
-参数说明： 
-### 1.简单参数 
-corePoolSize：线程池中的核心线程数量，核心线程会在线程池中一直存在，如果设置了allowCoreThreadTimeOut(true)，超时策略也会生效，即核心线程在等待超过keepAliveTime后也会被终止。 maximumPoolSize：线程池中的最大线程数量，当活动的线程超过了这个数量时，后续的任务会被阻塞。 keepAliveTime：就是当线程池中的线程数量超过了corePoolSize时，非核心线程在超过keepAliveTime时间内没有任务的话则被销毁。这个主要应用在缓存线程池中 
-unit：它是一个枚举类型，表示keepAliveTime的单位，常用的如：TimeUnit.SECONDS（秒）、TimeUnit.MILLISECONDS（毫秒）
-threadFactory：线程工厂，用来创建线程池中的线程，通常用默认的即可
+
+
 ### 2.BlockingQueue<Runnable> workQueue
 workQueue：任务队列，主要用来存储已经提交但未被执行的任务，不同的线程池采用的排队策略不一样，java中提供的workQueue：
 
@@ -349,44 +405,17 @@ workQueue：任务队列，主要用来存储已经提交但未被执行的任�
     4.PriorityBlockingQueue：一个具有优先级的无限阻塞队列。
     5.DelayedWorkQueue：等待队列，因为这些任务是带有延迟的，而每次执行都是取第一个任务执行，因此在DelayedWorkQueue中任务必然按照延迟时间从短到长来进行排序的。
 
-### 3.五种线程池分别用的lockingQueue：
+### 
 
-    1、newFixedThreadPool()—>LinkedBlockingQueue 
-    2、newSingleThreadExecutor()—>LinkedBlockingQueue 
-    3、newCachedThreadPool()—>SynchronousQueue 
-    4、newScheduledThreadPool()—>DelayedWorkQueue 
-    5、newSingleThreadScheduledExecutor()—>DelayedWorkQueue 等待队列
-
-### 4.RejectedExecutionHandler
-通常叫做拒绝策略，当队列和线程池都满了，说明线程池处于饱和状态，那么必须采取一种策略处理提交的新任务。这个策略默认情况下是AbortPolicy，表示无法处理新任务时抛出异常。以下是JDK1.5提供的四种策略。
-
-    1.AbortPolicy：直接抛出异常。
-    2.CallerRunsPolicy：只用调用者所在线程来运行任务。
-    3.DiscardOldestPolicy：丢弃队列里最近的一个任务，并执行当前任务。
-    4.DiscardPolicy：不处理，丢弃掉。
-当然也可以根据应用场景需要来实现RejectedExecutionHandler接口自定义策略。如记录日志或持久化不能处理的任务。
-
-### 2. 运行规则
-
-（1）如果线程池中的数量为达到核心线程的数量，则直接会启动一个核心线程来执行任务。
-
-（2）如果线程池中的数量已经达到或超过核心线程的数量，则任务会被插入到任务队列中标等待执行。
-
-（3）如果(2)中的任务无法插入到任务队列中，由于任务队列已满，这时候如果线程数量未达到线程池规定最大值，则会启动一个非核心线程来执行任务。
-
-（4）如果(3)中线程数量已经达到线程池最大值，则会拒绝执行此任务，ThreadPoolExecutor会调用RejectedExecutionHandler的rejectedExecution方法通知调用者
-
-单次可执行任务数：maximumPoolSize
+    
 
 
+
+## 2.4、线程回收
 
 ## 三、ExecutorService 
 
-通过上述分析，我们知道了通过new Thread().start()方式创建线程去处理任务的弊端，而为了解决这些问题，Java为我们提供了ExecutorService线程池来优化和管理线程的使用。ExecutorService，是一个接口，其实如果要从真正意义上来说，它可以叫做线程池的服务，因为它提供了众多接口api来控制线程池中的线程，而真正意义上的线程池就是：ThreadPoolExecutor，它实现了ExecutorService接口，并封装了一系列的api使得它具有线程池的特性，其中包括工作队列、核心线程数、最大线程数等。
-**使用线程池的优点**
-1、线程的创建和销毁由线程池维护，一个线程在完成任务后并不会立即销毁，而是由后续的任务复用这个线程，从而减少线程的创建和销毁，节约系统的开销
-2、线程池旨在线程的复用，这就可以节约我们用以往的方式创建线程和销毁所消耗的时间，减少线程频繁调度的开销，从而节约系统资源，提高系统吞吐量
-3、在执行大量异步任务时提高了性能
+
 
 ### 1、newFixedThreadPool
 
@@ -446,7 +475,15 @@ if(线程执行时间＞period）
 执行周期 = 线程执行时间+delay
 ```
 
-## 
+
+
+3.五种线程池分别用的lockingQueue：
+
+1、newFixedThreadPool()—>LinkedBlockingQueue 
+2、newSingleThreadExecutor()—>LinkedBlockingQueue 
+3、newCachedThreadPool()—>SynchronousQueue 
+4、newScheduledThreadPool()—>DelayedWorkQueue 
+5、newSingleThreadScheduledExecutor()—>DelayedWorkQueue 等待队列
 
 
 
