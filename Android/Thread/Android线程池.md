@@ -457,7 +457,7 @@ getTask的流程图如下：
 Worker是通过继承AQS，使用AQS来实现独占锁这个功能。没有使用可重入锁ReentrantLock，而是使用AQS，为的就是实现不可重入的特性去反应线程现在的执行状态。
 
 1. lock方法一旦获取了独占锁，表示当前线程正在执行任务中；
-2. 如果正在执行任务，则不应该中断线程；
+2. 如果正在执行任务，则不应该中断线程，**shutdownNow除外**。
 3.  如果该线程现在不是独占锁的状态，也就是空闲的状态，说明它没有在处理任务，这时可以对该线程进行中断；
 4.  线程池在执行shutdown方法或tryTerminate方法时会调用interruptIdleWorkers方法来中断空闲的线程，interruptIdleWorkers方法会使用tryLock方法来判 断线程池中的线程是否是空闲状态；如果线程是空闲状态则可以安全回收。
 
@@ -547,7 +547,7 @@ final void tryTerminate() {
 
 1. shutdown的设置状态是SHUTDOWN，仅中断空闲线程，不会影响正在执行的任务；
 
-2. shutdownNow的状态设置为STOP，会中断所有线程。
+2. shutdownNow的状态设置为STOP，**会中断所有线程**。
 
 ```java
 public void shutdown() {
@@ -604,7 +604,7 @@ private void advanceRunState(int targetState) {
 }
 ```
 
-10行：interruptIdleWorkers，**中断空闲线程，会使用tryLock方法来判断线程池中的线程是否是空闲状态；如果线程是空闲状态则可以安全回收。**
+10行：shutdown.interruptIdleWorkers，**中断空闲线程，会使用tryLock方法来判断线程池中的线程是否是空闲状态；如果线程是空闲状态则可以安全回收。**
 
 ```java
 private void interruptIdleWorkers() {
@@ -635,7 +635,7 @@ private void interruptIdleWorkers(boolean onlyOne) {
 }
 ```
 
-29行：interruptWorkers，
+29行：shutdownNow.interruptWorkers，中断所有线程，**包括正在运行的线程**。
 
 ```java
 private void interruptWorkers() {
@@ -669,7 +669,7 @@ void interruptIfStarted() {
 | 线程                    | 描述                                                         | 阻塞队列            |
 | ----------------------- | ------------------------------------------------------------ | ------------------- |
 | newFixedThreadPool      | 只有核心线程，核心线程数 == 最大线程数，                     | LinkedBlockingQueue |
-| newCachedThreadPool     | 只有非核心线程，最大线程数为Integer.MAX_VALUE                | SynchronousQueu     |
+| newCachedThreadPool     | 只有非核心线程，最大线程数为Integer.MAX_VALUE                | SynchronousQueue    |
 | newSingleThreadExecutor | 线程池内部只有一个核心线程，所有的任务都在一个线程中执行，用唯一的工作线程来执行任务，保证所有任务按照指定顺序(FIFO, LIFO, 优先级)执行 | LinkedBlockingQueue |
 | newScheduledThreadPool  | 最大线程数为Integer.MAX_VALUE，执行定时任务和固定周期的任务  | DelayedWorkQueue    |
 | newScheduledThreadPool  | 和上面区别是该线程池大小为1。                                | DelayedWorkQueue    |
@@ -678,7 +678,7 @@ void interruptIfStarted() {
 
 1. FixedThreadPool和SingleThreadPool：允许的请求队列长度为Integet.MAX_VALUE,可能会堆积大量的请求从而导致OOM;
 
-2. CachedThreadPool：允许创建线程数量为Integet.MAX_VALUE,可能会创建大量的线程，从而导致OOM.
+2. CachedThreadPool：允许创建线程数量为Integet.MAX_VALUE,可能会创建大量的线程，从而导致OOM。
 
 参考：
 http://blog.csdn.net/u010687392/article/details/49850803
