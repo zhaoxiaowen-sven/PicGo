@@ -61,11 +61,11 @@ public ThreadPoolExecutor(int corePoolSize,
 
 1. **coreSize**
 
-   默认情况下，在创建了线程池后，线程池中的线程数为0，当有任务来之后，就会创建一个线程去执行任务，当线程池中的线程数目达到corePoolSize后，就会把到达的任务放到任务队列当中。线程池将长期保证这些线程处于存活状态，即使线程已经处于闲置状态。除非配置了allowCoreThreadTimeOut=true，核心线程数的线程也将不再保证长期存活于线程池内，在空闲时间超过keepAliveTime后被销毁。
+   默认情况下，在创建了线程池后，线程池中的线程数为0，当有任务来之后，就会创建一个线程去执行任务，当线程池中的线程数目达到corePoolSize后，就会把到达的任务放到任务队列当中。线程池将长期保证这些线程处于存活状态，即使线程已经处于闲置状态。除非配置了allowCoreThreadTimeOut=true，核心线程数的线程也会在空闲时间超过keepAliveTime后被销毁。
 
 2. **maximumPoolSize**
 
-   线程池内的最大线程数量，线程池内维护的线程不得超过该数量，大于核心线程数量小于最大线程数量的线程将在空闲时间超过keepAliveTime后被销毁。当阻塞队列存满后，将会创建新线程执行任务，线程的数量不会大于maximumPoolSize。maximumPoolSize的上限是
+   线程池内的最大线程数量，线程池内维护的线程不得超过该数量，大于核心线程数量的线程将在空闲时间超过keepAliveTime后被销毁。当阻塞队列存满后，将会创建新线程执行任务，线程的数量不会大于maximumPoolSize。maximumPoolSize的上限是
 
 $$
 2^n -1 (n = 29)
@@ -112,11 +112,12 @@ ThreadPoolExecutor运行机制如下图所示：
 
 - 线程管理部分是消费者，它们被统一维护在线程池内，根据任务请求进行线程的分配，当线程执行完任务后则会继续获取新的任务去执行，最终当线程获取不到任务的时候，线程就会被回收。
 
-我们会按照以下三个部分去详细讲解线程池运行机制：
+我们会按照以下四个部分去详细讲解线程池运行机制：
 
 1. 线程池的状态管理。
-2. 任务的提交。
-3. 任务的执行。
+2. 任务提交。
+3. 任务执行。
+4. Worker和线程回收
 
 ## 3.1、线程池状态管理
 
@@ -143,7 +144,7 @@ private static int ctlOf(int rs, int wc) { return rs | wc; }
 | 状态       | 前3位值 | 描述                                                         |
 | ---------- | ------- | ------------------------------------------------------------ |
 | RUNNING    | 111     | 能接受新提交的任务，也能处理阻塞队列中的任务。               |
-| SHUTDOWN   | 000     | 关闭状态，不再接受新提交的任务，单可以继续执行已添加到阻塞队列中的任务。 |
+| SHUTDOWN   | 000     | 关闭状态，不再接受新提交的任务，但可以继续执行已添加到阻塞队列中的任务。 |
 | STOP       | 001     | 不能接受新任务，也不能处理队列中的任务，会中断正在执行的任务的线程。 |
 | TIDYING    | 010     | 所有的任务都已经终止，workerCount（有效线程数）为0           |
 | TERMINATED | 011     | 在terminated()方法执行完后进入该状态                         |
@@ -223,6 +224,7 @@ private boolean addWorker(Runnable firstTask, boolean core) {
         // Check if queue empty only if necessary.
         // 1、检查线程池是否不可创建任务
         if (rs >= SHUTDOWN &&
+            // 下面的每个条件都要满足才return false
             ! (rs == SHUTDOWN &&
                firstTask == null &&
                ! workQueue.isEmpty()))
@@ -238,7 +240,7 @@ private boolean addWorker(Runnable firstTask, boolean core) {
             if (compareAndIncrementWorkerCount(c))
                 break retry;
             c = ctl.get();  // Re-read ctl
-            // 4、重新检查线程池状态，防止添加任务过程中，线程池状态被SHUTDONW
+            // 4、重新检查线程池状态，防止添加任务过程中，线程池状态被SHUTDOWN
             if (runStateOf(c) != rs)
                 continue retry;
             // else CAS failed due to workerCount change; retry inner loop
@@ -249,7 +251,7 @@ private boolean addWorker(Runnable firstTask, boolean core) {
     boolean workerAdded = false;
     Worker w = null;
     try {
-        // 5、检查线程状态
+        // 5、创建Worker
         w = new Worker(firstTask);
         final Thread t = w.thread;
         if (t != null) {
@@ -265,7 +267,7 @@ private boolean addWorker(Runnable firstTask, boolean core) {
                     (rs == SHUTDOWN && firstTask == null)) {
                     if (t.isAlive()) // precheck that t is startable
                         throw new IllegalThreadStateException();
-                    // 7、添加worker到hashSet中
+                    // 7、添加Worker到hashSet中
                     workers.add(w);
                     int s = workers.size();
                     if (s > largestPoolSize)
@@ -293,17 +295,17 @@ private boolean addWorker(Runnable firstTask, boolean core) {
 
 ![image-20210307210048523](../../pics/image-20210307210048523.png)
 
-经过上面的分析，我们知道线程池将线程和任务封装到Worker中，下面看下worker的实现。
+经过上面的分析，我们知道线程池将线程和任务封装到Worker中，下面看下Worker的实现。
 
 ## 3.3、任务执行
 
 ### 3.3.1、Worker
 
-Worker的创建有2个时机：
+Worker的创建2种情况：
 
-1. 如果workerCount < corePoolSize，则创建并启动核心程来执行新提交的任务。
+1. firstTask != null，创建线程并执行firstTask，firstTask执行完成后，从队列中获取任务执行。
 
-2. 如果workerCount >= corePoolSize && workerCount < maximumPoolSize，且线程池内的阻塞队列已满，则创建并启动一个线程来执行新提交的任务。
+2. firstTask == null，创建线程后从队列中取任务执行。
 
 Worker执行任务的模型如下图所示：
 
@@ -421,9 +423,9 @@ private Runnable getTask() {
         int wc = workerCountOf(c);
 
         // Are workers subject to culling?
-        // 2.是否要回收线程
+        // 2.是否要回收线程，若allowCoreThreadTimeOut = true，则一直为true
         boolean timed = allowCoreThreadTimeOut || wc > corePoolSize;
-        // 3.线程数 > max 或 队列为空
+        // 3.(线程数 > max || 需要回收线程) && (线程数 > 1 || 队列为空)
         if ((wc > maximumPoolSize || (timed && timedOut))
             && (wc > 1 || workQueue.isEmpty())) {
             if (compareAndDecrementWorkerCount(c))
@@ -432,7 +434,8 @@ private Runnable getTask() {
         }
 
         try {
-            // 4.获取队列中的任务，若回收线程，则等待keepAliveTime时间再从队列中获取
+            // 4.获取队列中的任务，若time == true，若在keepAliveTime时间没有获取到任务，则执行到35行，再执行到24，
+            // 使得getTask == null，Worker被回收。
             Runnable r = timed ?
                 workQueue.poll(keepAliveTime, TimeUnit.NANOSECONDS) :
                 workQueue.take();
@@ -447,6 +450,8 @@ private Runnable getTask() {
 ```
 
 10行：线程池关闭的原理，当满足条件（线程状态 == STOP或TIDYING或TERMINATED） || （线程状态为SHUTDOWN && 任务队列为空）是返回空任务。
+
+19行 - 39行：allowCoreThreadTimeOut的原理，当timed=true时，若time == true，若在keepAliveTime时间没有获取到任务，timedOut = true，则执行到下一次循环时，使得getTask 返回null，Worker会被回收。
 
 getTask的流程图如下：
 
@@ -485,7 +490,7 @@ private void processWorkerExit(Worker w, boolean completedAbruptly) {
     } finally {
         mainLock.unlock();
     }
-	// 2.尝试回收空闲线程，停止线程池，正常运行的线程池调用该方法不会有任何动作
+	  // 2.尝试回收空闲线程，停止线程池，正常运行的线程池调用该方法不会有任何动作
     tryTerminate();
 
     int c = ctl.get();
@@ -545,7 +550,7 @@ final void tryTerminate() {
 
 线程池退出有2个入口，shutdown 和shutdownNow。这2者的区别：
 
-1. shutdown的设置状态是SHUTDOWN，仅中断空闲线程，不会影响正在执行的任务；
+1. shutdown的设置状态是SHUTDOWN，**仅中断空闲线程，不会影响正在执行的任务**；
 
 2. shutdownNow的状态设置为STOP，**会中断所有线程**。
 
