@@ -685,9 +685,11 @@ void interruptIfStarted() {
 
 2. CachedThreadPool：允许创建线程数量为Integet.MAX_VALUE,可能会创建大量的线程，从而导致OOM。
 
-参考：
-http://blog.csdn.net/u010687392/article/details/49850803
-《Android开发艺术探索》
+
+
+## 参考
+
+https://tech.meituan.com/2020/04/02/java-pooling-pratice-in-meituan.html
 
 https://www.cnblogs.com/franson-2016/p/13291591.html
 
