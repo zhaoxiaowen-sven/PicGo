@@ -1,80 +1,108 @@
 # HashMap
 
+HashMap是Java程序员使用频率最高的用于映射(键值对)处理的数据类型。现在我们就来学习一下HashMap数据结构和功能原理，基于JDK8。
+
 # 一、数据结构
 
-散列表，数组 + 链表，链表长度大于8时，升级为红黑树
+HashMap使用的数据结构是**数组 （这个数组通常被称为称为哈希桶或table）+ 链表**，链表长度大于8时，链表升级为红黑树（JDK8新增），
 
-# 二、原理介绍
+<img src="../pics/image-20210310212941190.png" alt="image-20210310212941190" style="zoom:50%;" />
 
-## 2.1、数据结构
-
-## 2.2、Hash算法
-
-## 2.3、扩容规则
-
-# 四、源码分析
-
-## 4.1、常量
+元素存储使用的数据结构是Node，Node是HashMap的一个内部类，实现了Map.Entry接口，本质是就是一个映射(键值对)。
 
 ```java
-// 默认的table大小
-static final int DEFAULT_INITIAL_CAPACITY = 1 << 4; // aka 16
-// table最大容量
-static final int MAXIMUM_CAPACITY = 1 << 30;
-// 负载因子
-static final float DEFAULT_LOAD_FACTOR = 0.75f;
-// 树化阈值，链表长度
-static final int TREEIFY_THRESHOLD = 8;
-// 树降级为链表阈值
-static final int UNTREEIFY_THRESHOLD = 6;
-// 树化的另一个约束阈值，数组长度超过64，2个参数要同时满足，这个MIN_TREEIFY_CAPACITY的值至少是TREEIFY_THRESHOLD的4倍。
-static final int MIN_TREEIFY_CAPACITY = 64;
-```
+public class HashMap<K,V> extends AbstractMap<K,V>
+    implements Map<K,V>, Cloneable, Serializable {	
+  
+  // 默认的数组大小
+  static final int DEFAULT_INITIAL_CAPACITY = 1 << 4; // aka 16
+  // 数组最大容量
+  static final int MAXIMUM_CAPACITY = 1 << 30;
+  // 负载因子
+  static final float DEFAULT_LOAD_FACTOR = 0.75f;
+  // 树化阈值，链表长度
+  static final int TREEIFY_THRESHOLD = 8;
+  // 树降级为链表阈值
+  static final int UNTREEIFY_THRESHOLD = 6;
+  // 树化的另一个约束阈值，数组长度超过64，2个参数要同时满足，
+  // 这个MIN_TREEIFY_CAPACITY的值至少是TREEIFY_THRESHOLD的4倍。
+  static final int MIN_TREEIFY_CAPACITY = 64;
+  
+  // hash表
+  transient Node<K,V>[] table;
+  // hash表中Node个数
+  transient int size;
+  // 结构修改次数（插入或删除元素时+1，替换不变）
+  transient int modCount;
+  // 扩容阈值    
+  int threshold;
+  // 用于计算扩容阈值，threshold = capacity * loadFactor
+  final float loadFactor;
+  
+  static class Node<K,V> implements Map.Entry<K,V> {
+      final int hash; // key 的hash值
+      final K key; //键
+      V value; // 值
+      Node<K,V> next; // 链表的下一个节点
 
-## 4.2、变量
-
-```java
-// hash表
-transient Node<K,V>[] table;
-// hash表中元素个数
-transient int size;
-// 结构修改次数（插入或删除元素时 + 1）
-transient int modCount;
-// 扩容阈值    
-int threshold;
-// 用于计算扩容阈值，threshold = capacity * loadFactor
-final float loadFactor;
-```
-
-
-
-返回一个大于当前CAPACITY的值且这个数字是2的次方数
-
-```java
-static final int tableSizeFor(int cap) {
-    int n = cap - 1;
-    n |= n >>> 1;
-    n |= n >>> 2;
-    n |= n >>> 4;
-    n |= n >>> 8;
-    n |= n >>> 16;
-    return (n < 0) ? 1 : (n >= MAXIMUM_CAPACITY) ? MAXIMUM_CAPACITY : n + 1;
+      Node(int hash, K key, V value, Node<K,V> next) {
+          this.hash = hash;
+          this.key = key;
+          this.value = value;
+          this.next = next;
+      }
+     //...
+  }
 }
 ```
 
-## 4.3、hash
+HashMap 基本工作原理是插入数据时，计算key的hash，再经过位与运算计算出索引，插入到数组中；当新插入的key的index和已有的冲突时，将新节点插入到已有节点的后面，构成链表；当链表长度大于8时，将链表转化为红黑树。
+
+# 二、Hash规则
+
+HashMap的增删改查，定位到哈希桶数组的位置都是很关键的第一步。如果 HashMap 里面的元素位置分布均匀，每个位置上的元素数量只有一个或少个，就能大大优化查找key的效率。
 
 ```java
+// 方法1
 static final int hash(Object key) {
     int h;
+    // 1.h = key.hashCode()，取hashCode
+    // 2.h ^ (h >>> 16)，高位参与运算
     return (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
 }
 
-
- tab[i = (n - 1) & hash]
+// 方法2
+static int indexFor(int h, int length) { //jdk1.7的源码，jdk1.8没有这个方法，但是实现原理一样的
+		return h & (length-1); // 3.位与运算（取模运算），使索引落到[0,length - 1]之间
+}
 ```
 
-## 4.4、put
+通过一张图来分析下。
+
+<img src="../pics/image-20210310230422639.png" alt="image-20210310230422639" style="zoom:50%;" />
+
+Java中，Object类是所有类的父类，所有的对象，包括数组，都实现了在`Object`类中定义的方法。Object类hashCode方法返回值是int类型，int为4个字节，1个字节是8位，4个字节就是32位。
+
+```java
+h = key.hashCode()) ^ (h >>> 16)
+```
+
+右位移 16 位，正好是 32位的一半，高半区和低半区做异或，就是为了混合原始hashCode的高位和低位，以此来加大低位的随机性。而且混合后的低位掺杂了高位的部分特征，这样高位的信息也被变相保留下来。相当于hash算法增加了更多的因子，能够更好的均匀散列，减少碰撞，进一步降低hash冲突的几率。
+
+# 三、put的原理
+
+put的原理如下：
+
+<img src="../pics/image-20210310232925256.png" alt="image-20210310232925256" style="zoom:50%;" />
+
+1. hashMap使用的是懒加载，只有在执行put操作时才会创建数组。若table=null或size=0则创建table（通过扩容逻辑）。
+2. 对key的hashCode()高低16位异或，位与(table.length - 1)计算index（第二节介绍过了）;
+3. 如果index没碰撞直接插到table里；
+4. 如果碰撞了，有三种情况：
+   - 若头元素的key和插入key相同则替换；
+   - 若头元素是个TreeNode，则将Node插入到红黑树中；
+   - 以上2种情况都不满足，说明是个链表且头元素的key和插入的不相同，遍历链表，若链表中存在相同key的Node，替换该节点值；否则，插入到链表尾，并且判断链表是否需要转换成红黑树。
+5. 容量 ++ ，若容量达到扩容阈值，进行扩容。
 
 ```java
 public V put(K key, V value) {
@@ -127,7 +155,7 @@ final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
             return oldValue;
         }
     }
-    // 别修改的次数，替换不算
+    // 修改的次数，替换不算
     ++modCount;
     // 插入元素个数+1 > 
     if (++size > threshold)
@@ -137,7 +165,11 @@ final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
 }
 ```
 
-## 4.5、resize
+# 四、resize
+
+扩容原理主要步骤有：
+
+
 
 ```java
 final Node<K,V>[] resize() {
@@ -237,9 +269,9 @@ final Node<K,V>[] resize() {
 }
 ```
 
-## 4.6、remove
+## 4.5、remove
 
-```
+```java
 public V remove(Object key) {
     Node<K,V> e;
     return (e = removeNode(hash(key), key, null, false, true)) == null ?
@@ -292,6 +324,35 @@ final Node<K,V> removeNode(int hash, Object key, Object value,
             --size;
             afterNodeRemoval(node);
             return node;
+        }
+    }
+    return null;
+}
+```
+
+
+
+```java
+public V get(Object key) {
+    Node<K,V> e;
+    return (e = getNode(hash(key), key)) == null ? null : e.value;
+}
+
+final Node<K,V> getNode(int hash, Object key) {
+    Node<K,V>[] tab; Node<K,V> first, e; int n; K k;
+    if ((tab = table) != null && (n = tab.length) > 0 &&
+        (first = tab[(n - 1) & hash]) != null) {
+        if (first.hash == hash && // always check first node
+            ((k = first.key) == key || (key != null && key.equals(k))))
+            return first;
+        if ((e = first.next) != null) {
+            if (first instanceof TreeNode)
+                return ((TreeNode<K,V>)first).getTreeNode(hash, key);
+            do {
+                if (e.hash == hash &&
+                    ((k = e.key) == key || (key != null && key.equals(k))))
+                    return e;
+            } while ((e = e.next) != null);
         }
     }
     return null;
