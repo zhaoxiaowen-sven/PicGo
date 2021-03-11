@@ -96,7 +96,7 @@ put的原理如下：
 <img src="../pics/image-20210310232925256.png" alt="image-20210310232925256" style="zoom:50%;" />
 
 1. hashMap使用的是懒加载，只有在执行put操作时才会创建数组。若table=null或size=0则创建table（通过扩容逻辑）。
-2. 对key的hashCode()高低16位异或，位与(table.length - 1)计算index（第二节介绍过了）;
+2. 对key的hashCode()高低16位异或，位与(table.length - 1)计算出要插入到table的index（第二节介绍过了）;
 3. 如果index没碰撞直接插到table里；
 4. 如果碰撞了，有三种情况：
    - 若头元素的key和插入key相同则替换；
@@ -167,14 +167,90 @@ final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
 
 # 四、resize
 
-扩容原理主要步骤有：
+扩容原理主要步骤有：容量和扩容阈值调整以及数据迁移。先来看下
 
+## 4.1、容量和扩容阈值调整
 
+![image-20210311112923942](../pics/image-20210311112923942.png)
+
+步骤如下：
+
+1. oldCap > 0 说明table已经初始化过，扩容时有2种情况
+
+   - oldCap >= MAXIMUM_CAPACITY，table数组容量达到最大，不可再扩容
+   - oldCap < MAXIMUM_CAPACITY，新容量newCap扩大oldCap的2倍。接着再判断（newCap < MAXIMUM_CAPACITY） && oldCap>= 16，则将扩容阈值调整为原来的2倍。一般情况下newCap < MAXIMUM_CAPACITY都是成立的，主要看第二个条件，oldCap是否大于16。也就是说除非我们的oldCap容量 <16, 正常扩容时容量和扩容阈值都会翻倍。<16时，最终threshold = cap * factor（0.75）。
+
+2. oldCap == 0，说明table还未初始化或者未添加元素情况，也有2种：
+
+   - oldThr > 0 说明使用的是非无参的构造方法（有3个入口）：
+
+     ```java
+     public HashMap(int initialCapacity) {
+         this(initialCapacity, DEFAULT_LOAD_FACTOR);
+     }
+     
+     public HashMap(int initialCapacity, float loadFactor) {
+         // ...
+         this.loadFactor = loadFactor;
+         this.threshold = tableSizeFor(initialCapacity);
+     }
+     
+     public HashMap(Map<? extends K, ? extends V> m) {
+         this.loadFactor = DEFAULT_LOAD_FACTOR;
+         putMapEntries(m, false);
+     }
+     
+     ```
+
+     以上3个构造方法，都会使得threshold被tableSizeFor赋值，结果为大于且最接近cap的2的n次方；最终这个值又会被赋值到 newCap = oldThr；**也就是说table的容量永远都是2的n次方。**
+
+     ```java
+     static final int tableSizeFor(int cap) {
+         int n = cap - 1;
+         n |= n >>> 1;
+         n |= n >>> 2;
+         n |= n >>> 4;
+         n |= n >>> 8;
+         n |= n >>> 16;
+         return (n < 0) ? 1 : (n >= MAXIMUM_CAPACITY) ? MAXIMUM_CAPACITY : n + 1;
+     }
+     ```
+
+   - oldThr == 0，说明使用的hashMap的无参构造方法，也就是我们最常用的构造方法。
+
+     ```java
+     public HashMap() {
+         this.loadFactor = DEFAULT_LOAD_FACTOR; // all other fields defaulted
+     }
+     ```
+
+​              仅初始化负载因子为0.75；如果是这种情况，那么newCap = 16，newThr = 12。
+
+   3. 经过以上2步，新table的容量newCap的值就被确定了，接下来就是调整扩容阈值。满足newThr == 0，有2种情况：
+
+      - 扩容的oldCap <16；
+
+      - 使用**非无参构造函数初始化**的hashMap。这2种情况是有联系的，只有使用非无参构造函数初始化的cap才可能小于16，当它再次扩容时出现第一种情况。
+
+        ```java
+         if (newThr == 0) {
+             float ft = (float)newCap * loadFactor;
+             newThr = (newCap < MAXIMUM_CAPACITY && ft < (float)MAXIMUM_CAPACITY ?
+                       (int)ft : Integer.MAX_VALUE);
+         }
+         threshold = newThr;
+        ```
+
+        跟进loadFactor和newCap计算扩容阈值，如果newCap < MAXIMUM_CAPACITY 且ft < (float)MAXIMUM_CAPACITY,那么说明扩容阈值有效，否则说明table容量达到最大，为Integer.MAX_VALUE。最后再将计算完的扩容阈值赋值给threshold。
+
+代码如下：
 
 ```java
 final Node<K,V>[] resize() {
     Node<K,V>[] oldTab = table;
+    // 当前容量
     int oldCap = (oldTab == null) ? 0 : oldTab.length;
+    // 当前扩容阈值
     int oldThr = threshold;
     int newCap, newThr = 0;
     // ====== 容量和扩容阈值调整逻辑 begin ======
@@ -206,7 +282,15 @@ final Node<K,V>[] resize() {
     threshold = newThr;
     // ====== 容量和扩容阈值调整逻辑 end ======
     
-    @SuppressWarnings({"rawtypes","unchecked"})
+}
+```
+
+## 4.2、数据迁移
+
+```java
+final Node<K,V>[] resize() {
+   // ...
+	@SuppressWarnings({"rawtypes","unchecked"})
     // 创建newCap大小容量
     Node<K,V>[] newTab = (Node<K,V>[])new Node[newCap];
     table = newTab;
@@ -268,6 +352,10 @@ final Node<K,V>[] resize() {
     return newTab;
 }
 ```
+
+
+
+# 五、其他方法
 
 ## 4.5、remove
 
