@@ -243,7 +243,7 @@ final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
 
         跟进loadFactor和newCap计算扩容阈值，如果newCap < MAXIMUM_CAPACITY 且ft < (float)MAXIMUM_CAPACITY,那么说明扩容阈值有效，否则说明table容量达到最大，为Integer.MAX_VALUE。最后再将计算完的扩容阈值赋值给threshold。
 
-代码如下：
+**代码如下：**
 
 ```java
 final Node<K,V>[] resize() {
@@ -287,6 +287,30 @@ final Node<K,V>[] resize() {
 
 ## 4.2、数据迁移
 
+![image-20210311215256697](../pics/image-20210311215256697.png)
+
+步骤如下：
+
+1. 创建数组newTab，大小为newCab,newCap的大小逻辑，我们刚才已经介绍过了。
+
+2. 遍历oldTab，开始数据迁移，假设当前位置索引为 i ，当前Node 为 e：
+
+   - e.next == null，说明哈希桶只有一个元素，复制到newTab[i]；
+
+   - e 是一个treeNode，插入到红黑树中；
+
+   - 以上2种情况都不满足，说明是一个链表，将链表中的所有Node插入到新列表中。介绍下扩容插入的原理。
+
+     我们知道table形成链表，说明index = h & (length-1)得到了相同的值。假设length = 16 ，length - 1相应的二进制是  0b1111，index若相同说明h的低4位是相同；扩容后length = 32，length - 1的表示为二进制为 0b11111，也就是说取 h 的低5位。假设我们要迁移节点的 index = 0b 0101，迁移时要取的 h 的低五位，此时 h 的第五位有2种情况 0x10101 或 0x00101（这2种情况，若取低4位index相同即扩容前），经过计算后新的index 就有2种情况，转换为10 进制 newIndex = index 或 newIndex = index + oldCap。
+
+    
+
+   ![image-20210311220343714](../pics/image-20210311220343714.png)
+
+   ​         这也是为什么要扩容的原因，扩容后相同hash的链表长度会变短，分布的更加均匀，查找效率更高。 
+
+   - 还是上面的例子，oldCap表示为二进制0b 10000，e.hash & oldCap == 0说明是高位为0，扩容完的索引与原数组相同；e.hash & oldCap == 1说明是高位为1，计算出的newTab的 nexIndex = [index + newCap]；
+
 ```java
 final Node<K,V>[] resize() {
    // ...
@@ -320,7 +344,7 @@ final Node<K,V>[] resize() {
                     Node<K,V> next;
                     do {
                         next = e.next;
-                        if ((e.hash & oldCap) == 0) { // 放入低位链表中的元素
+                        if ((e.hash & oldCap) == 0) { // 说明是低位链表，放入低位链表中
                             if (loTail == null)// 首个元素赋值到表头
                                 loHead = e;
                             else
@@ -342,7 +366,7 @@ final Node<K,V>[] resize() {
                         newTab[j] = loHead;
                     }
                     if (hiTail != null) {
-                        hiTail.next = null;
+                        hiTail.next = null; // 必要炒作，原Node还有
                         newTab[j + oldCap] = hiHead;
                     }
                 }
@@ -357,7 +381,7 @@ final Node<K,V>[] resize() {
 
 # 五、其他方法
 
-## 4.5、remove
+## 5.1 、remove
 
 ```java
 public V remove(Object key) {
@@ -418,7 +442,7 @@ final Node<K,V> removeNode(int hash, Object key, Object value,
 }
 ```
 
-
+## 5.2、get
 
 ```java
 public V get(Object key) {
