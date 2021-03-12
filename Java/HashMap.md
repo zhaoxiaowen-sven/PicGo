@@ -87,11 +87,15 @@ Java中，Object类是所有类的父类，所有的对象，包括数组，都�
 h = key.hashCode()) ^ (h >>> 16)
 ```
 
-右位移 16 位，正好是 32位的一半，高半区和低半区做异或，就是为了混合原始hashCode的高位和低位，以此来加大低位的随机性。而且混合后的低位掺杂了高位的部分特征，这样高位的信息也被变相保留下来。相当于hash算法增加了更多的因子，能够更好的均匀散列，减少碰撞，进一步降低hash冲突的几率。
+右位移 16 位，正好是 32位的一半，高半区和低半区做异或，就是为了混合原始hashCode的高位和低位，以此来加大低位的随机性。而且混合后的低位掺杂了高位的部分特征，这样高位的信息也被变相保留下来。相当于hash算法增加了更多的因子，能够更好的均匀散列，减少碰撞，进一步降低hash冲突的几率。、
 
-# 三、put的原理
+# 三、put
 
-put的原理如下：
+HashMap中核心方法是增加元素的put和扩容resize，我们先来看下put。
+
+## 3.1、put的过程
+
+
 
 <img src="../pics/image-20210310232925256.png" alt="image-20210310232925256" style="zoom:50%;" />
 
@@ -100,8 +104,8 @@ put的原理如下：
 3. 如果index没碰撞直接插到table里；
 4. 如果碰撞了，有三种情况：
    - 若头元素的key和插入key相同则替换；
-   - 若头元素是个TreeNode，则将Node插入到红黑树中；
-   - 以上2种情况都不满足，说明是个链表且头元素的key和插入的不相同，遍历链表，若链表中存在相同key的Node，替换该节点值；否则，插入到链表尾，并且判断链表是否需要转换成红黑树。
+   - 若头元素是个TreeNode，则将Node插入到红黑树中，先遍历，再插入，再平衡；若相同则替换。
+   - 以上2种情况都不满足，说明是个链表且头元素的key和插入的不相同，遍历链表，若链表中存在相同key的Node，替换该节点值；否则，插入到链表尾，并且判断链表是否需要转换成红黑树（树化下一小节讲）。
 5. 容量 ++ ，若容量达到扩容阈值，进行扩容。
 
 ```java
@@ -165,9 +169,106 @@ final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
 }
 ```
 
-# 四、resize
+## 3.2、树化
 
-扩容原理主要步骤有：容量和扩容阈值调整以及数据迁移。先来看下
+树化步骤如下：
+
+1. 将单链表先转化为一个双向链表，节点数据结构变为TreeNode
+2. 将双向链表转换为红黑树
+
+**也就是说树化后的哈希桶既是一个红黑树，也是一个双向链表**
+
+```java
+final void treeifyBin(Node<K,V>[] tab, int hash) {
+    int n, index; Node<K,V> e;
+    if (tab == null || (n = tab.length) < MIN_TREEIFY_CAPACITY) //1. table== null 或长度小于64，进行初始化或扩容
+        resize();
+    else if ((e = tab[index = (n - 1) & hash]) != null) {
+        TreeNode<K,V> hd = null,//hd 是头节点
+        tl = null;// tl指向上一个节点
+        do {// 2.do while 将单链表先转化为一个双向链表
+            TreeNode<K,V> p = replacementTreeNode(e, null); // p 是当前TreeNode节点,将Node转化为TreeNode
+            if (tl == null)
+                hd = p;
+            else {
+                p.prev = tl;
+                tl.next = p;
+            }
+            tl = p;
+        } while ((e = e.next) != null); 
+        if ((tab[index] = hd) != null)
+            hd.treeify(tab); // 3.真正的树化是TreeNode的代码
+    }
+}
+```
+
+真正的树化 TreeNode.treeify，主要步骤有：
+
+1. 遍历链表，若红黑树的root节点还未创建，将链表第一个节点作为root
+2. 遍历剩余节点，根据这些节点的hash值和key计算出dir，若dir<=0 遍历红黑树的左子树，否则遍历红黑树的右子树，插入到叶子节点的位置。
+3. 插入节点后，平衡红黑树，注意是在for循环中，每插入一次都会平衡一下；
+4. 调整双向链表顺序，将红黑树的root节点作为当前hash桶的头节点，将当前头节点的元素作为root的下一个节点。
+
+```java
+final void treeify(Node<K,V>[] tab) {
+    TreeNode<K,V> root = null;
+    for (TreeNode<K,V> x = this, next; x != null; x = next) { // for循环，遍历双向链表
+        // x 表示当前要插入的节点
+        
+        // next是x的下一个节点
+        next = (TreeNode<K,V>)x.next;
+        x.left = x.right = null;// 将x的左右子树节点置空
+        
+        if (root == null) { // 将第一个节点作为头节点
+            x.parent = null;
+            x.red = false;
+            root = x;
+        }
+        else { //遍历其他节点
+            K k = x.key; // x节点的key
+            int h = x.hash; // x节点的hash
+            Class<?> kc = null;
+            for (TreeNode<K,V> p = root;;) { // 遍历这颗红黑树，p指向当前节点
+                int dir // dir < 0,插入左子树;> 0 插入右子树
+                    , ph; // p节点的hash
+                K pk = p.key; // p节点的key
+                if ((ph = p.hash) > h) // 比较节点的hash，同一个hash桶位的节点index相同，hash值不一定相同，index 取 tablelength 长度的低位。
+                    dir = -1;
+                else if (ph < h)
+                    dir = 1;
+                else if ((kc == null && // hash值相同的情况，key也相等
+                          (kc = comparableClassFor(k)) == null) ||
+                         (dir = compareComparables(kc, k, pk)) == 0)
+                    dir = tieBreakOrder(k, pk);// 比较keyclass 和 key 的identityHashCode，不用太细究
+
+                TreeNode<K,V> xp = p; // 下面的遍历过程中 xp指的是p的父节点
+                // 拆分成2个逻辑看:
+           		// p = dir < 0 ? p.left ：p.right,第一步根据dir遍历节点左子树或右子树
+                // p == null //只到找到叶子节点 
+                if ((p = (dir <= 0) ? p.left : p.right) == null) { 
+                    x.parent = xp; // 将x节点插入到xp后
+                    if (dir <= 0)
+                        xp.left = x; // < 0是左节点 
+                    else
+                        xp.right = x; // >0 是右节点
+                    root = balanceInsertion(root, x);//插入后,再平衡
+                    break;
+                }
+            }
+        }
+    }
+    moveRootToFront(tab, root); //将 root节点放到table[i],作为当前hash桶的第一个元素，同时调整双向链表。
+}
+```
+
+# 四、resize的
+
+resize主要是put元素过程中，处理扩容，扩容原理主要步骤有2步：
+
+1. 容量和扩容阈值调整
+2. 数据迁移。
+
+先来看下容量和扩容阈值调整
 
 ## 4.1、容量和扩容阈值调整
 
@@ -287,8 +388,6 @@ final Node<K,V>[] resize() {
 
 ## 4.2、数据迁移
 
-![image-20210311215256697](../pics/image-20210311215256697.png)
-
 步骤如下：
 
 1. 创建数组newTab，大小为newCab,newCap的大小逻辑，我们刚才已经介绍过了。
@@ -297,7 +396,7 @@ final Node<K,V>[] resize() {
 
    - e.next == null，说明哈希桶只有一个元素，复制到newTab[i]；
 
-   - e 是一个treeNode，插入到红黑树中；
+   - e 是一个treeNode，尝试将当前索引位置的红黑树进行拆分，下一节分析；
 
    - 以上2种情况都不满足，说明是一个链表，将链表中的所有Node插入到新列表中。介绍下扩容插入的原理。
 
@@ -327,7 +426,7 @@ final Node<K,V>[] resize() {
                 // 当前桶位只有单个元素，计算新的元素
                 if (e.next == null)
                     newTab[e.hash & (newCap - 1)] = e;
-                // 红黑树
+                // 尝试将红黑树拆分为2个链表
                 else if (e instanceof TreeNode)
                     ((TreeNode<K,V>)e).split(this, newTab, j, oldCap);
                 else { // preserve order
@@ -377,72 +476,80 @@ final Node<K,V>[] resize() {
 }
 ```
 
+### 4.3、红黑树的拆分
+
+我们知道，扩容时oldTab相同index的可能放到newTab数组下标是index或index + oldCap的位置，如果oldTab[index]存放的是红黑树，那么扩容完的2个位置哈希桶的元素个数可能就不足8个，此时就需要对红黑树进行拆分。拆分步骤如下：
+
+1. 类似拆分链表，先将当前红黑树拆分为2个双向链表，高位链表hi 和 低位链表li
+2.  如果低位单链表不为空，此时有2种情况，假设低位链表长度为lc
+   - 若lc <= 6 则将低位红黑树转为单链表；
+   - 若 lc > 6 时，如果hiHead == null，高位链表为空，说明原链表的所有元素都在低位链表中，不需要再进行树化；否则要对链表进行树化。
+3. 如果高位链表不为空，类似低位链表的处理，<=6 转换为单链表，大于6 且 低位链表为空，不需要做任何操作；否则要对链表进行树化。
+
+```java
+final void split(HashMap<K,V> map, Node<K,V>[] tab, int index, int bit) {
+    TreeNode<K,V> b = this;
+    // Relink into lo and hi lists, preserving order
+    TreeNode<K,V> loHead = null, loTail = null;
+    TreeNode<K,V> hiHead = null, hiTail = null;
+    int lc = 0, // 低位链表长度
+    hc = 0; // 高位链表长度
+    // 1. 当前红黑树拆分为2个双向链表
+    for (TreeNode<K,V> e = b, next; e != null; e = next) {
+        next = (TreeNode<K,V>)e.next;
+        e.next = null;
+        if ((e.hash & bit) == 0) {
+            if ((e.prev = loTail) == null)
+                loHead = e;
+            else
+                loTail.next = e;
+            loTail = e;
+            ++lc;
+        }
+        else {
+            if ((e.prev = hiTail) == null)
+                hiHead = e;
+            else
+                hiTail.next = e;
+            hiTail = e;
+            ++hc;
+        }
+    }
+
+    if (loHead != null) {
+        if (lc <= UNTREEIFY_THRESHOLD) // 若lc <= 6 则将低位红黑树转为单链表
+            tab[index] = loHead.untreeify(map);
+        else {
+            // 若 lc > 6 时，如果hiHead == null，高位链表为空，说明原链表的所有元素都在低位链表中，不需要再进行树化；否则要对链表进行树化。
+            tab[index] = loHead; 
+            if (hiHead != null) // (else is already treeified)
+                loHead.treeify(tab);
+        }
+    }
+    if (hiHead != null) {
+        if (hc <= UNTREEIFY_THRESHOLD)
+            tab[index + bit] = hiHead.untreeify(map);
+        else {
+            tab[index + bit] = hiHead;
+            if (loHead != null)
+                hiHead.treeify(tab);
+        }
+    }
+}
+```
+
 
 
 # 五、其他方法
 
-## 5.1 、remove
+## 5.1、get
 
-```java
-public V remove(Object key) {
-    Node<K,V> e;
-    return (e = removeNode(hash(key), key, null, false, true)) == null ?
-        null : e.value;
-}
+步骤如下：
 
-/**
- * Implements Map.remove and related methods.
- *
- * @param hash hash for key
- * @param key the key
- * @param value the value to match if matchValue, else ignored
- * @param matchValue if true only remove if value is equal
- * @param movable if false do not move other nodes while removing
- * @return the node, or null if none
- */
-final Node<K,V> removeNode(int hash, Object key, Object value,
-                           boolean matchValue, boolean movable) {
-    Node<K,V>[] tab; Node<K,V> p; int n, index;
-    if ((tab = table) != null && (n = tab.length) > 0 &&
-        (p = tab[index = (n - 1) & hash]) != null) {
-        Node<K,V> node = null, e; K k; V v;
-        if (p.hash == hash &&
-            ((k = p.key) == key || (key != null && key.equals(k))))
-            node = p;
-        else if ((e = p.next) != null) {
-            if (p instanceof TreeNode)
-                node = ((TreeNode<K,V>)p).getTreeNode(hash, key);
-            else {
-                do {
-                    if (e.hash == hash &&
-                        ((k = e.key) == key ||
-                         (key != null && key.equals(k)))) {
-                        node = e;
-                        break;
-                    }
-                    p = e;
-                } while ((e = e.next) != null);
-            }
-        }
-        if (node != null && (!matchValue || (v = node.value) == value ||
-                             (value != null && value.equals(v)))) {
-            if (node instanceof TreeNode)
-                ((TreeNode<K,V>)node).removeTreeNode(this, tab, movable);
-            else if (node == p)
-                tab[index] = node.next;
-            else
-                p.next = node.next;
-            ++modCount;
-            --size;
-            afterNodeRemoval(node);
-            return node;
-        }
-    }
-    return null;
-}
-```
-
-## 5.2、get
+1. 计算key的hash，再根据hash得出哈希桶的index
+2. 取头结点不为空，判断头节点的key和需要的key是否相同，相同直接返回，
+3. 是否是ThreeNode，遍历红黑树获取
+4. 以上都不满足说明是链表，遍历链表后获取
 
 ```java
 public V get(Object key) {
@@ -470,3 +577,77 @@ final Node<K,V> getNode(int hash, Object key) {
     return null;
 }
 ```
+
+## 5.2、remove
+
+remove 比较简单，
+
+```java
+public V remove(Object key) {
+    Node<K,V> e;
+    return (e = removeNode(hash(key), key, null, false, true)) == null ?
+        null : e.value;
+}
+
+/**
+ * Implements Map.remove and related methods.
+ *
+ * @param hash hash for key
+ * @param key the key
+ * @param value the value to match if matchValue, else ignored
+ * @param matchValue if true only remove if value is equal
+ * @param movable if false do not move other nodes while removing
+ * @return the node, or null if none
+ */
+final Node<K,V> removeNode(int hash, Object key, Object value,
+                           boolean matchValue, boolean movable) {
+    Node<K,V>[] tab; Node<K,V> p; //p是头节点
+    int n, index;
+    
+    if ((tab = table) != null && (n = tab.length) > 0 &&
+        (p = tab[index = (n - 1) & hash]) != null) {
+        Node<K,V> node = null, // Node是待删除的节点
+        e; K k; V v;
+        if (p.hash == hash &&
+            ((k = p.key) == key || (key != null && key.equals(k))))
+            node = p; //p是头节点
+        else if ((e = p.next) != null) {
+            if (p instanceof TreeNode) // p是ThreeNode
+                node = ((TreeNode<K,V>)p).getTreeNode(hash, key);
+            else { // 链表的处理
+                do {
+                    if (e.hash == hash &&
+                        ((k = e.key) == key ||
+                         (key != null && key.equals(k)))) {
+                        node = e;// 查找要删除的节点
+                        break;
+                    }
+                    p = e;// p 更新为要删除节点的上一个节点
+                } while ((e = e.next) != null);
+            }
+        }
+        if (node != null && (!matchValue || (v = node.value) == value ||
+                             (value != null && value.equals(v)))) {
+            if (node instanceof TreeNode)
+                ((TreeNode<K,V>)node).removeTreeNode(this, tab, movable);
+            else if (node == p) // node是头结点
+                tab[index] = node.next;
+            else //删除node节点
+                p.next = node.next;
+            ++modCount; // 修改次数 ++ 
+            --size;
+            afterNodeRemoval(node);
+            return node;
+        }
+    }
+    return null;
+}
+```
+
+
+
+## 参考
+
+https://www.bilibili.com/video/BV1LJ411W7dP?p=3
+
+https://www.bilibili.com/video/BV1uy4y1k7Uf
