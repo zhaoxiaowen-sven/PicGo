@@ -261,7 +261,7 @@ final void treeify(Node<K,V>[] tab) {
 }
 ```
 
-# 四、resize的
+# 四、resize
 
 resize主要是put元素过程中，处理扩容，扩容原理主要步骤有2步：
 
@@ -388,6 +388,8 @@ final Node<K,V>[] resize() {
 
 ## 4.2、数据迁移
 
+<img src="../pics/image-20210312231650233.png" alt="image-20210312231650233" style="zoom:50%;" />
+
 步骤如下：
 
 1. 创建数组newTab，大小为newCab,newCap的大小逻辑，我们刚才已经介绍过了。
@@ -476,7 +478,7 @@ final Node<K,V>[] resize() {
 }
 ```
 
-### 4.3、红黑树的拆分
+## 4.3、红黑树的拆分
 
 我们知道，扩容时oldTab相同index的可能放到newTab数组下标是index或index + oldCap的位置，如果oldTab[index]存放的是红黑树，那么扩容完的2个位置哈希桶的元素个数可能就不足8个，此时就需要对红黑树进行拆分。拆分步骤如下：
 
