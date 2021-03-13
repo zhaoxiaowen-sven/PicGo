@@ -51,6 +51,11 @@ public V put(K key, V value) {
 }
 ```
 
+<<<<<<< HEAD
+=======
+
+
+>>>>>>> 3d8862077e55d93cae13145d0310a2a3c433ab56
 segments 的位置，取hash值的高位
 
 ```java
@@ -63,6 +68,7 @@ segments 中HashEntry的位置，取hash值的低位
 int index = (tab.length - 1) & hash;
 ```
 
+<<<<<<< HEAD
 
 
 ```
@@ -92,6 +98,8 @@ private Segment<K,V> ensureSegment(int k) {
 
 
 
+=======
+>>>>>>> 3d8862077e55d93cae13145d0310a2a3c433ab56
 扩容：
 
 ```java
