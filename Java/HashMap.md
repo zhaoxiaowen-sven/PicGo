@@ -4,7 +4,7 @@ HashMap是Java程序员使用频率最高的用于映射(键值对)处理的数�
 
 # 一、数据结构
 
-HashMap使用的数据结构是**数组 （这个数组通常被称为称为哈希桶或table）+ 链表**，链表长度大于8时，链表升级为红黑树（JDK8新增），
+HashMap使用的数据结构是**数组 （这个数组通常被称为称为哈希桶或table）+ 链表**，链表长度大于8时，链表升级为红黑树（JDK8新增）。
 
 <img src="../pics/image-20210310212941190.png" alt="image-20210310212941190" style="zoom:50%;" />
 
@@ -67,13 +67,13 @@ HashMap的增删改查，定位到哈希桶数组的位置都是很关键的第�
 static final int hash(Object key) {
     int h;
     // 1.h = key.hashCode()，取hashCode
-    // 2.h ^ (h >>> 16)，高位参与运算
+    // 2.h ^ (h >>> 16)，异或运算，高位参与
     return (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
 }
 
 // 方法2
 static int indexFor(int h, int length) { //jdk1.7的源码，jdk1.8没有这个方法，但是实现原理一样的
-		return h & (length-1); // 3.位与运算（取模运算），使索引落到[0,length - 1]之间
+		return h & (length-1); // 3.位与运算  ，使索引落到[0,length - 1]之间
 }
 ```
 
@@ -87,7 +87,7 @@ Java中，Object类是所有类的父类，所有的对象，包括数组，都�
 h = key.hashCode()) ^ (h >>> 16)
 ```
 
-右位移 16 位，正好是 32位的一半，高半区和低半区做异或，就是为了混合原始hashCode的高位和低位，以此来加大低位的随机性。而且混合后的低位掺杂了高位的部分特征，这样高位的信息也被变相保留下来。相当于hash算法增加了更多的因子，能够更好的均匀散列，减少碰撞，进一步降低hash冲突的几率。、
+右位移 16 位，正好是 32位的一半，高半区和低半区做异或，就是为了混合原始hashCode的高位和低位，以此来加大低位的随机性。而且混合后的低位掺杂了高位的部分特征，这样高位的信息也被变相保留下来。**总结下：key的hash值并不是key的hashCode而是经过位移和异或得到的新值，hash算法增加了更多的因子，能够更好的均匀散列，减少碰撞，进一步降低hash冲突的几率**。
 
 # 三、put
 
@@ -161,7 +161,7 @@ final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
     }
     // 修改的次数，替换不算
     ++modCount;
-    // 插入元素个数+1 > 
+    // 插入元素个数+1 > threshold 进行扩容
     if (++size > threshold)
         resize();
     afterNodeInsertion(evict);
@@ -170,6 +170,8 @@ final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
 ```
 
 ## 3.2、树化
+
+上面我们讲了树化的条件是：table的某个桶位插入节点后size>6.
 
 树化步骤如下：
 
@@ -263,7 +265,9 @@ final void treeify(Node<K,V>[] tab) {
 
 # 四、resize
 
-resize主要是put元素过程中，处理扩容，扩容原理主要步骤有2步：
+resize主要是put元素过程中，处理扩容，触发扩容的条件是size(节点数) > threshold 且 数组长度 >64。 
+
+扩容原理主要步骤有2步：
 
 1. 容量和扩容阈值调整
 2. 数据迁移。
@@ -354,7 +358,7 @@ final Node<K,V>[] resize() {
     // 当前扩容阈值
     int oldThr = threshold;
     int newCap, newThr = 0;
-    // ====== 容量和扩容阈值调整逻辑 begin ======
+    
     if (oldCap > 0) {
         // 容量达到最大，不再扩容
         if (oldCap >= MAXIMUM_CAPACITY) {
@@ -381,8 +385,6 @@ final Node<K,V>[] resize() {
                   (int)ft : Integer.MAX_VALUE);
     }
     threshold = newThr;
-    // ====== 容量和扩容阈值调整逻辑 end ======
-    
 }
 ```
 
@@ -540,8 +542,6 @@ final void split(HashMap<K,V> map, Node<K,V>[] tab, int index, int bit) {
 }
 ```
 
-
-
 # 五、其他方法
 
 ## 5.1、get
@@ -643,6 +643,131 @@ final Node<K,V> removeNode(int hash, Object key, Object value,
         }
     }
     return null;
+}
+```
+
+
+
+# 六、JDK1.7
+
+## 6.1、数据结构
+
+ 与1.8的 HashMap的区别为数据结构为数组加链表
+
+## 6.2、Hash规则
+
+hash规则与1.8 基本一致，通过高低位异或使得数据hash值更均匀。
+
+```java
+final int hash(Object k) {
+    int h = hashSeed;
+    if (0 != h && k instanceof String) {
+        return sun.misc.Hashing.stringHash32((String) k);
+    }
+
+    h ^= k.hashCode();
+
+    // This function ensures that hashCodes that differ only by
+    // constant multiples at each bit position have a bounded
+    // number of collisions (approximately 8 at default load factor).
+    h ^= (h >>> 20) ^ (h >>> 12);
+    return h ^ (h >>> 7) ^ (h >>> 4);
+}
+```
+
+节点的table索引计算规则不变
+
+```java
+static int indexFor(int h, int length) {
+    // assert Integer.bitCount(length) == 1 : "length must be a non-zero power of 2";
+    return h & (length-1);
+}
+```
+
+## 6.3、put
+
+put方法采用的是头插法。
+
+```java
+public V put(K key, V value) {
+    if (table == EMPTY_TABLE) {
+        inflateTable(threshold);
+    }
+    if (key == null)
+        return putForNullKey(value);
+    int hash = hash(key);
+    int i = indexFor(hash, table.length);
+    for (Entry<K,V> e = table[i]; e != null; e = e.next) {
+        Object k;
+        if (e.hash == hash && ((k = e.key) == key || key.equals(k))) {
+            V oldValue = e.value;
+            e.value = value;
+            e.recordAccess(this);
+            return oldValue;
+        }
+    }
+
+    modCount++;
+    addEntry(hash, key, value, i);
+    return null;
+}
+
+void addEntry(int hash, K key, V value, int bucketIndex) {
+    if ((size >= threshold) && (null != table[bucketIndex])) {
+        resize(2 * table.length);
+        hash = (null != key) ? hash(key) : 0;
+        bucketIndex = indexFor(hash, table.length);
+    }
+    createEntry(hash, key, value, bucketIndex);
+}
+
+void createEntry(int hash, K key, V value, int bucketIndex) {
+    // 头插法插入
+    Entry<K,V> e = table[bucketIndex];
+    // 这里很关键，插入时新节点的的next -> 头节点
+    // 将新节点放到原头节点的位置
+    table[bucketIndex] = new Entry<>(hash, key, value, e);
+    size++;
+}
+```
+
+6.2、resize 扩容
+
+resize 扩容的核心算法是transfer，采用的是头插法，扩容后的链表顺序会翻转，
+
+```java
+void resize(int newCapacity) {
+    Entry[] oldTable = table;
+    int oldCapacity = oldTable.length;
+    if (oldCapacity == MAXIMUM_CAPACITY) {
+        threshold = Integer.MAX_VALUE;
+        return;
+    }
+
+    Entry[] newTable = new Entry[newCapacity];
+    transfer(newTable, initHashSeedAsNeeded(newCapacity));
+    table = newTable;
+    threshold = (int)Math.min(newCapacity * loadFactor, MAXIMUM_CAPACITY + 1);
+}
+
+/**
+ * Transfers all entries from current table to newTable.
+ */
+void transfer(Entry[] newTable, boolean rehash) {
+    int newCapacity = newTable.length;
+    for (Entry<K,V> e : table) { //遍历并转移
+        while(null != e) {
+            Entry<K,V> next = e.next;
+            if (rehash) {
+                e.hash = null == e.key ? 0 : hash(e.key);
+            }
+            int i = indexFor(e.hash, newCapacity);
+            // 扩容时采用头插法，列表被逆转
+            e.next = newTable[i];
+            newTable[i] = e;
+            e = next;
+        }
+    }
 }
 ```
 
